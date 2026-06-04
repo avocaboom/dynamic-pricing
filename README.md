@@ -152,7 +152,24 @@ Both are caught in `PricingService` and mapped to `504 Gateway Timeout`.
 
 ### 3. Caching strategy — `Rails.cache.fetch` with MemoryStore
 
-<!-- TODO: fill in after Step 3 implementation -->
+Caching is implemented in `PricingService#run` using `Rails.cache.fetch`:
+
+```ruby
+Rails.cache.fetch("pricing/v1/#{period}/#{hotel}/#{room}", expires_in: 5.minutes) do
+  fetch_from_upstream
+end
+```
+
+**Why `fetch` instead of manual `read`/`write`?**
+`Rails.cache.fetch` is atomic — it reads, and only writes if the block executes. This eliminates a class of bugs where `read` returns nil, the block runs, but `write` is forgotten or skipped on error paths. If the block raises, nothing is cached. If the block succeeds, the value is cached automatically.
+
+**Cache key format: `pricing/v1/{period}/{hotel}/{room}`**
+The key encodes all three dimensions that uniquely identify a rate. The `pricing/v1/` prefix namespaces the key for clarity and allows bulk invalidation by prefix if needed. No hashing — plain string keys are readable in logs and debuggable.
+
+**Failure behavior (Opsi A — strict):**
+If the upstream fails after cache expires, the service returns an error to the client. Stale data is never served. This strictly respects the "rate valid for 5 minutes" constraint from the spec.
+
+Known trade-off: availability suffers when upstream is down and cache is cold. A stale-while-revalidate pattern would improve this but requires additional infrastructure (background jobs) and explicitly violates the 5-minute freshness guarantee. Documented as a future improvement.
 
 ---
 
