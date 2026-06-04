@@ -150,30 +150,7 @@ Both are caught in `PricingService` and mapped to `504 Gateway Timeout`.
 
 ---
 
-### 3. Caching strategy — `Rails.cache.fetch` with MemoryStore
-
-Caching is implemented in `PricingService#run` using `Rails.cache.fetch`:
-
-```ruby
-Rails.cache.fetch("pricing/v1/#{period}/#{hotel}/#{room}", expires_in: 5.minutes) do
-  fetch_from_upstream
-end
-```
-
-**Why `fetch` instead of manual `read`/`write`?**
-`Rails.cache.fetch` is atomic — it reads, and only writes if the block executes. This eliminates a class of bugs where `read` returns nil, the block runs, but `write` is forgotten or skipped on error paths. If the block raises, nothing is cached. If the block succeeds, the value is cached automatically.
-
-**Cache key format: `pricing/v1/{period}/{hotel}/{room}`**
-The key encodes all three dimensions that uniquely identify a rate. The `pricing/v1/` prefix namespaces the key for clarity and allows bulk invalidation by prefix if needed. No hashing — plain string keys are readable in logs and debuggable.
-
-**Failure behavior (Opsi A — strict):**
-If the upstream fails after cache expires, the service returns an error to the client. Stale data is never served. This strictly respects the "rate valid for 5 minutes" constraint from the spec.
-
-Known trade-off: availability suffers when upstream is down and cache is cold. A stale-while-revalidate pattern would improve this but requires additional infrastructure (background jobs) and explicitly violates the 5-minute freshness guarantee. Documented as a future improvement.
-
----
-
-### 4. Cache store: MemoryStore vs Redis
+### 3. Cache store: MemoryStore vs Redis
 
 **Decision:** `MemoryStore` (Rails built-in, no additional infrastructure).
 
@@ -189,6 +166,15 @@ Known trade-off: availability suffers when upstream is down and cache is cold. A
 **Why MemoryStore for this assignment:**
 The constraint is 10,000 requests/day with a single API token. This maps to ~7 requests/minute — well within a single Puma process capacity. MemoryStore satisfies the requirement with zero additional infrastructure.
 
+**Known constraint — upstream call volume:**
+The 10,000 req/day refers to user requests to this service, not upstream calls. With a 5-minute TTL and 36 unique parameter combinations (4 periods × 3 hotels × 3 rooms), the worst-case upstream call volume is:
+
+```
+288 upstream calls/combination/day × 36 combinations = 10,368 upstream calls/day
+```
+
+This assumes all 36 combinations are actively requested throughout the day. The upstream `tripladev/rate-api` rate limit per token is not publicly documented, so this solution cannot be fully validated without knowing that limit. The stale fallback on HTTP 429 acts as a safety net — if rate limit is hit, the service continues serving the last known rate rather than returning an error.
+
 **Explicit scaling ceiling:**
 This design assumes a **single Puma process**. If the service is scaled to multiple workers (`WEB_CONCURRENCY > 1`) or multiple instances, each process maintains its own cache. This would multiply upstream calls proportionally and risk violating the rate limit.
 
@@ -198,6 +184,47 @@ This design assumes a **single Puma process**. If the service is scaled to multi
 3. Set `config.cache_store = :redis_cache_store, { url: ENV["REDIS_URL"] }` in `config/environments/production.rb`
 
 No application code changes required — `Rails.cache` API is identical.
+
+---
+
+### 4. Caching strategy — Dual-key cache with stale fallback
+
+The service uses two cache keys per unique `(period, hotel, room)` combination:
+
+| Key | TTL | Purpose |
+|---|---|---|
+| `pricing/v1/{period}/{hotel}/{room}` | 5 minutes | Fresh rate served to users |
+| `pricing/v1/stale/{period}/{hotel}/{room}` | 1 hour | Fallback when upstream hits rate limit |
+
+On every successful upstream call, both keys are written. On cache miss, the fresh key is fetched from upstream and both keys are refreshed.
+
+```ruby
+Rails.cache.fetch("pricing/v1/#{period}/#{hotel}/#{room}", expires_in: 5.minutes) do
+  rate = fetch_from_upstream          # raises on any failure
+  Rails.cache.write(stale_key, rate, expires_in: 1.hour)
+  rate
+end
+```
+
+**Why `fetch` instead of manual `read`/`write`?**
+`Rails.cache.fetch` is atomic — it reads, and only writes if the block executes. If the block raises (upstream error), nothing is cached. This prevents bad data from being stored.
+
+**Cache key format: `pricing/v1/{period}/{hotel}/{room}`**
+Plain string keys — readable in logs and debuggable. The `pricing/v1/` prefix namespaces keys for clarity and allows bulk invalidation by prefix if needed.
+
+**Failure behavior:**
+
+| Condition | Behavior |
+|---|---|
+| Upstream error / timeout | Return error to client (503/504). No stale served — these are transient failures, not rate limit. |
+| HTTP 429 (rate limit) + stale exists | Serve stale rate silently. User gets a response, rate is ≤ 1 hour old. |
+| HTTP 429 (rate limit) + no stale | Return 503. Happens only on very first request or after stale TTL expires. |
+
+**Why serve stale only on 429, not on all errors?**
+Rate limit (429) is predictable and temporary — the upstream is healthy but throttling us. Serving slightly stale data is a reasonable trade-off. Other errors (timeout, 503) indicate the upstream may be returning incorrect data, so stale fallback would be misleading.
+
+**Stale TTL (1 hour) — business decision pending:**
+The 1-hour value is a reasonable default. The exact tolerance for stale pricing data should be determined based on business requirements (e.g., how often do hotel rates actually change in practice).
 
 ---
 

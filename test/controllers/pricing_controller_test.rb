@@ -151,6 +151,51 @@ class Api::V1::PricingControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # --- Rate limit handling ---
+
+  test "returns stale rate when upstream hits rate limit and stale cache exists" do
+    # First request populates both fresh and stale cache
+    RateApiClient.stub(:get_rate, ->(*) { success_response }) do
+      get api_v1_pricing_url, params: valid_params
+    end
+
+    # After TTL, fresh cache expires — upstream returns 429
+    rate_limited = OpenStruct.new(success?: false, code: 429, body: "")
+    travel 6.minutes do
+      RateApiClient.stub(:get_rate, rate_limited) do
+        get api_v1_pricing_url, params: valid_params
+        assert_response :success
+        assert_equal "15000", json_response["rate"]
+      end
+    end
+  end
+
+  test "returns 503 when upstream hits rate limit and no stale cache exists" do
+    rate_limited = OpenStruct.new(success?: false, code: 429, body: "")
+    RateApiClient.stub(:get_rate, rate_limited) do
+      get api_v1_pricing_url, params: valid_params
+      assert_response :service_unavailable
+      assert json_response["error"].present?
+    end
+  end
+
+  test "returns 503 when upstream hits rate limit and stale cache has also expired" do
+    # Populate fresh + stale cache
+    RateApiClient.stub(:get_rate, ->(*) { success_response }) do
+      get api_v1_pricing_url, params: valid_params
+    end
+
+    # Travel past both fresh TTL (5 min) and stale TTL (1 hour)
+    rate_limited = OpenStruct.new(success?: false, code: 429, body: "")
+    travel(Api::V1::PricingService::STALE_CACHE_TTL + 6.minutes) do
+      RateApiClient.stub(:get_rate, rate_limited) do
+        get api_v1_pricing_url, params: valid_params
+        assert_response :service_unavailable
+        assert json_response["error"].present?
+      end
+    end
+  end
+
   private
 
   def valid_params
