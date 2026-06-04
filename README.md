@@ -166,15 +166,6 @@ Both are caught in `PricingService` and mapped to `504 Gateway Timeout`.
 **Why MemoryStore for this assignment:**
 The constraint is 10,000 requests/day with a single API token. This maps to ~7 requests/minute — well within a single Puma process capacity. MemoryStore satisfies the requirement with zero additional infrastructure.
 
-**Known constraint — upstream call volume:**
-The 10,000 req/day refers to user requests to this service, not upstream calls. With a 5-minute TTL and 36 unique parameter combinations (4 periods × 3 hotels × 3 rooms), the worst-case upstream call volume is:
-
-```
-288 upstream calls/combination/day × 36 combinations = 10,368 upstream calls/day
-```
-
-This assumes all 36 combinations are actively requested throughout the day. The upstream `tripladev/rate-api` rate limit per token is not publicly documented, so this solution cannot be fully validated without knowing that limit. The stale fallback on HTTP 429 acts as a safety net — if rate limit is hit, the service continues serving the last known rate rather than returning an error.
-
 **Explicit scaling ceiling:**
 This design assumes a **single Puma process**. If the service is scaled to multiple workers (`WEB_CONCURRENCY > 1`) or multiple instances, each process maintains its own cache. This would multiply upstream calls proportionally and risk violating the rate limit.
 
@@ -212,13 +203,22 @@ end
 **Cache key format: `pricing/v1/{period}/{hotel}/{room}`**
 Plain string keys — readable in logs and debuggable. The `pricing/v1/` prefix namespaces keys for clarity and allows bulk invalidation by prefix if needed.
 
+**Known constraint — upstream call volume:**
+The 10,000 req/day refers to user requests to this service, not upstream calls. With a 5-minute TTL and 36 unique parameter combinations (4 periods × 3 hotels × 3 rooms), the worst-case upstream call volume is:
+
+```
+288 upstream calls/combination/day × 36 combinations = 10,368 upstream calls/day
+```
+
+This assumes all 36 combinations are actively requested throughout the day. The upstream `tripladev/rate-api` rate limit per token is not publicly documented, so this solution cannot be fully validated without knowing that limit. The stale fallback on HTTP 429 (described below) acts as the safety net.
+
 **Failure behavior:**
 
 | Condition | Behavior |
 |---|---|
-| Upstream error / timeout | Return error to client (503/504). No stale served — these are transient failures, not rate limit. |
-| HTTP 429 (rate limit) + stale exists | Serve stale rate silently. User gets a response, rate is ≤ 1 hour old. |
-| HTTP 429 (rate limit) + no stale | Return 503. Happens only on very first request or after stale TTL expires. |
+| Upstream error / timeout | Error returned to client. Stale **not** served — error codes and status mapping are in Section 2. |
+| HTTP 429 (rate limit) + stale exists | Serve stale rate silently. User gets a response; rate is ≤ 1 hour old. |
+| HTTP 429 (rate limit) + no stale | Return 503. Occurs only on the very first request for this key, or after the stale TTL also expires. |
 
 **Why serve stale only on 429, not on all errors?**
 Rate limit (429) is predictable and temporary — the upstream is healthy but throttling us. Serving slightly stale data is a reasonable trade-off. Other errors (timeout, 503) indicate the upstream may be returning incorrect data, so stale fallback would be misleading.
@@ -232,6 +232,7 @@ The 1-hour value is a reasonable default. The exact tolerance for stale pricing 
 
 - Service runs as a **single Puma process** (see cache store decision above)
 - A rate remains valid for exactly **5 minutes** regardless of market conditions (per assignment spec)
+- Stale pricing data up to **1 hour old** is acceptable as a fallback when the upstream rate limit (429) is hit
 - Upstream timeout of **5 seconds** is sufficient for ML inference
 - Upstream API token (`RATE_API_TOKEN`) is stable and does not rotate during runtime
 
