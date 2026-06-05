@@ -27,15 +27,14 @@ docker compose exec interview-dev ./bin/rails test test/controllers/pricing_cont
 ### With monitoring stack (optional)
 
 ```bash
-# Start everything including Grafana, Prometheus, Tempo, Loki
+# Start everything including Grafana, Loki, Promtail, Prometheus
 docker compose --profile monitoring up -d --build
 
-# Grafana dashboard  → http://localhost:3001  (admin / admin)
+# Grafana dashboard  → http://localhost:3001  (no login required)
 # Prometheus         → http://localhost:9090
-# Tempo (traces)     → http://localhost:3200
 ```
 
-Every response includes an `X-Trace-Id` header — paste it into Grafana → Explore → Tempo to see the full request trace.
+Every response includes an `X-Request-Id` header. Paste the value into the **Request Flow Trace** panel in Grafana to filter all log lines for that single request end-to-end.
 
 ---
 
@@ -247,25 +246,37 @@ The 1-hour value is a reasonable default. The exact tolerance for stale pricing 
 
 ### 5. Observability — Structured Logging
 
-All significant events are logged as JSON to `Rails.logger` for easy parsing by log aggregators (e.g., Datadog, CloudWatch).
+Structured logs are the first line of response when something goes wrong in production. Every event in this service — cache decisions, upstream calls, fallbacks, and HTTP requests — emits a single JSON line with a consistent schema. Because `request_id` is present on every line, the full lifecycle of any individual request can be reconstructed from logs.
+
+All events are logged as single-line JSON using [Lograge](https://github.com/roidrage/lograge) for the HTTP request line and a custom logger in `PricingService` for business events. Every line follows the same schema:
+
+```
+{ "request_id", "time", "level", "msg", ...event-specific fields }
+```
+
+`request_id` appears first on every line, making it easy to grep all log lines belonging to a single request.
 
 **Log events**
 
-| Event | Level | When |
+| `msg` | `level` | When |
 |---|---|---|
-| `pricing_cache` | `info` | Every request — includes `cache: "HIT"` or `"MISS"` |
-| `pricing_rate_limit` | `warn` | Upstream returns 429 and stale cache is served |
-| `pricing_rate_limit` | `error` | Upstream returns 429 and no stale cache available |
-| `pricing_upstream_timeout` | `error` | `Net::OpenTimeout` or `Net::ReadTimeout` |
-| `pricing_upstream_error` | `error` | Any other upstream failure — includes `error_class` and `message` |
+| `request` | `info` / `warn` / `error` | Every HTTP request (via Lograge) — level follows HTTP status: 2xx→info, 4xx→warn, 5xx→error |
+| `pricing_cache` | `info` | Every cache lookup — includes `cache: "HIT"` or `"MISS"` |
+| `upstream_call` | `info` | Successful upstream fetch — includes `duration_ms` and `rate` |
+| `upstream_call` | `warn` | Upstream returned 429 (rate limited) |
+| `cache_write` | `info` | After a successful upstream call — includes `fresh_ttl_s` and `stale_ttl_s` |
+| `stale_fallback` | `warn` | Upstream 429, stale cache served — includes `action: "served_stale"` |
+| `stale_fallback` | `error` | Upstream 429, no stale available — includes `action: "no_stale_available"` |
+| `upstream_timeout` | `error` | `Net::OpenTimeout` or `Net::ReadTimeout` |
+| `upstream_error` | `error` | Any other upstream failure — includes `error_class` and `message` |
 
-**Example log lines**
+**Example log lines for a single request**
 
 ```json
-{"event":"pricing_cache","cache":"MISS","period":"Summer","hotel":"FloatingPointResort","room":"SingletonRoom"}
-{"event":"pricing_cache","cache":"HIT","period":"Summer","hotel":"FloatingPointResort","room":"SingletonRoom"}
-{"event":"pricing_rate_limit","action":"served_stale","period":"Summer","hotel":"FloatingPointResort","room":"SingletonRoom"}
-{"event":"pricing_upstream_error","error_class":"RuntimeError","message":"Rate not found for the given parameters","period":"Summer","hotel":"FloatingPointResort","room":"SingletonRoom"}
+{"request_id":"abc-123","time":"2026-06-05T06:25:09.891Z","level":"info","msg":"pricing_cache","period":"Summer","hotel":"FloatingPointResort","room":"SingletonRoom","cache":"MISS"}
+{"request_id":"abc-123","time":"2026-06-05T06:25:09.909Z","level":"info","msg":"upstream_call","period":"Summer","hotel":"FloatingPointResort","room":"SingletonRoom","status":"success","duration_ms":18,"rate":"15000"}
+{"request_id":"abc-123","time":"2026-06-05T06:25:09.910Z","level":"info","msg":"cache_write","period":"Summer","hotel":"FloatingPointResort","room":"SingletonRoom","fresh_ttl_s":300,"stale_ttl_s":3600}
+{"request_id":"abc-123","time":"2026-06-05T06:25:09.922Z","level":"info","msg":"request","method":"GET","path":"/api/v1/pricing","status":200,"duration":45.95,"params":{"period":"Summer","hotel":"FloatingPointResort","room":"SingletonRoom"}}
 ```
 
 **What is never logged:** The `RATE_API_TOKEN` value — it is read from an environment variable and never passed to the logger.

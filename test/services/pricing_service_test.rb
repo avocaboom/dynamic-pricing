@@ -101,6 +101,77 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
     assert_log_contains('"status":"rate_limited"')
   end
 
+  # --- Stale fallback behavior ---
+
+  test "serves stale rate when upstream hits rate limit and stale cache exists" do
+    RateApiClient.stub(:get_rate, success_response) do
+      run_service
+    end
+
+    rate_limited = OpenStruct.new(success?: false, code: 429, body: "")
+    service = nil
+    travel 6.minutes do
+      RateApiClient.stub(:get_rate, rate_limited) do
+        service = build_service
+        service.run
+      end
+    end
+
+    assert service.valid?, "service should be valid when serving stale"
+    assert_equal "15000", service.result, "should return the cached stale rate"
+    assert service.served_stale?, "served_stale? should be true"
+  end
+
+  test "stale value matches the original successful rate" do
+    first_body = { "rates" => [{ "period" => "Summer", "hotel" => "FloatingPointResort", "room" => "SingletonRoom", "rate" => "99999" }] }.to_json
+    first_response = OpenStruct.new(success?: true, body: first_body)
+
+    RateApiClient.stub(:get_rate, first_response) do
+      run_service
+    end
+
+    rate_limited = OpenStruct.new(success?: false, code: 429, body: "")
+    service = nil
+    travel 6.minutes do
+      RateApiClient.stub(:get_rate, rate_limited) do
+        service = build_service
+        service.run
+      end
+    end
+
+    assert_equal "99999", service.result, "stale result must match what was originally cached"
+  end
+
+  test "is invalid with 503 status when rate limited and no stale cache exists" do
+    rate_limited = OpenStruct.new(success?: false, code: 429, body: "")
+    service = build_service
+    RateApiClient.stub(:get_rate, rate_limited) do
+      service.run
+    end
+
+    refute service.valid?
+    assert_equal :service_unavailable, service.http_status
+    assert service.errors.any?
+  end
+
+  test "is invalid with 503 status when rate limited and stale cache has expired" do
+    RateApiClient.stub(:get_rate, success_response) do
+      run_service
+    end
+
+    rate_limited = OpenStruct.new(success?: false, code: 429, body: "")
+    service = nil
+    travel(Api::V1::PricingService::STALE_CACHE_TTL + 6.minutes) do
+      RateApiClient.stub(:get_rate, rate_limited) do
+        service = build_service
+        service.run
+      end
+    end
+
+    refute service.valid?
+    assert_equal :service_unavailable, service.http_status
+  end
+
   # --- Upstream error logging ---
 
   test "logs upstream_timeout on ReadTimeout" do
@@ -119,6 +190,48 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
     assert_log_contains('"error_class"')
   end
 
+  # --- Upstream timeout behavior ---
+
+  test "is invalid with 504 status on Net::ReadTimeout" do
+    service = build_service
+    RateApiClient.stub(:get_rate, -> (*) { raise Net::ReadTimeout }) do
+      service.run
+    end
+
+    refute service.valid?
+    assert_equal :gateway_timeout, service.http_status
+    assert_includes service.errors.first, "timed out"
+  end
+
+  test "is invalid with 504 status on Net::OpenTimeout" do
+    service = build_service
+    RateApiClient.stub(:get_rate, -> (*) { raise Net::OpenTimeout }) do
+      service.run
+    end
+
+    refute service.valid?
+    assert_equal :gateway_timeout, service.http_status
+    assert_includes service.errors.first, "timed out"
+  end
+
+  test "timeout does not serve stale — stale is only for rate limit" do
+    RateApiClient.stub(:get_rate, success_response) do
+      run_service
+    end
+
+    service = nil
+    travel 6.minutes do
+      RateApiClient.stub(:get_rate, -> (*) { raise Net::ReadTimeout }) do
+        service = build_service
+        service.run
+      end
+    end
+
+    refute service.valid?, "timeout should not fall back to stale cache"
+    assert_equal :gateway_timeout, service.http_status
+    refute service.served_stale?
+  end
+
   # --- Token safety ---
 
   test "API token does not appear in log output" do
@@ -132,7 +245,11 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
   private
 
   def run_service
-    Api::V1::PricingService.new(period: "Summer", hotel: "FloatingPointResort", room: "SingletonRoom").run
+    build_service.run
+  end
+
+  def build_service
+    Api::V1::PricingService.new(period: "Summer", hotel: "FloatingPointResort", room: "SingletonRoom")
   end
 
   def success_response

@@ -47,7 +47,7 @@
       "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
         {
-          "expr": "sum by (status) (count_over_time({job=\"rails\", msg=\"request\"} | json | __error__=\"\" | status != \"\" [$__interval]))",
+          "expr": "sum by (status) (count_over_time({job=\"rails\", msg=\"request\"} | json [$__interval]))",
           "legendFormat": "HTTP {{status}}"
         }
       ],
@@ -158,13 +158,17 @@
         {
           "expr": "count_over_time({job=\"rails\", msg=\"upstream_call\"} |= \"rate_limited\" [$__interval])",
           "legendFormat": "rate_limited"
+        },
+        {
+          "expr": "count_over_time({job=\"rails\", msg=\"upstream_error\"} [$__interval])",
+          "legendFormat": "error"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
           "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true, "showPoints": "always", "pointSize": 6 }
         }
       },
       "options": { "tooltip": { "mode": "multi" } }
@@ -198,7 +202,7 @@
         "defaults": {
           "unit": "short",
           "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true, "showPoints": "always", "pointSize": 6 }
         }
       },
       "options": { "tooltip": { "mode": "multi" } }

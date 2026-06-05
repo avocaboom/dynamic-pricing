@@ -133,6 +133,27 @@ class Api::V1::PricingControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "returns 504 for all valid param combinations when upstream times out and no cache exists" do
+    periods = %w[Summer Autumn Winter Spring]
+    hotels  = %w[FloatingPointResort GitawayHotel RecursionRetreat]
+    rooms   = %w[SingletonRoom BooleanTwin RestfulKing]
+
+    periods.each do |period|
+      hotels.each do |hotel|
+        rooms.each do |room|
+          Rails.cache.clear
+          RateApiClient.stub(:get_rate, ->(*) { raise Net::ReadTimeout }) do
+            get api_v1_pricing_url, params: { period: period, hotel: hotel, room: room }
+            assert_response :gateway_timeout,
+              "Expected 504 for (#{period}, #{hotel}, #{room}), got #{@response.status}"
+            assert_includes json_response["error"], "timed out",
+              "Expected 'timed out' in error for (#{period}, #{hotel}, #{room})"
+          end
+        end
+      end
+    end
+  end
+
   test "returns error when upstream returns malformed JSON" do
     malformed = OpenStruct.new(success?: true, body: "not valid json{{{")
     RateApiClient.stub(:get_rate, malformed) do
