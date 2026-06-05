@@ -348,7 +348,27 @@ At 10k req/day on a single process, concurrent upstream calls are rare. The stal
 
 **Migration path:** Introduce a circuit breaker (e.g., `gem "stoplight"`) around `RateApiClient.get_rate`. When the upstream error rate exceeds a threshold, the circuit opens and requests fail fast — returning stale immediately without waiting for a timeout.
 
-### 4. Cold start spike
+### 4. Synchronized cache expiry
+
+When all 36 combinations are cached at the same time (e.g., after a cold start), they all expire at the same time — producing a predictable upstream call spike every 5 minutes.
+
+```
+t=0:00  Restart → 36 upstream calls → all 36 keys cached
+t=5:00  All 36 keys expire simultaneously
+t=5:01  36 requests → 36 upstream calls at once → repeat every 5 minutes
+```
+
+At 10k req/day this is unlikely to trigger the rate limit in practice, and the stale fallback absorbs failures if it does. At higher traffic or with a tighter upstream rate limit, this periodic spike becomes a real concern.
+
+**Mitigation (not implemented):** Add jitter to the TTL so each key expires at a slightly different time:
+
+```ruby
+expires_in: CACHE_TTL - 30.seconds + rand(60).seconds  # ±30s around TTL
+```
+
+This distributes upstream calls evenly instead of batching them.
+
+### 5. Cold start spike
 
 On every service restart, `MemoryStore` is wiped — all 36 cache keys (fresh + stale) are lost. If all 36 combinations are requested within the first 5 minutes after restart, this produces a burst of up to 36 upstream calls in rapid succession, which may trigger the upstream rate limit depending on how tight it is.
 
