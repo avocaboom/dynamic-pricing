@@ -228,6 +228,33 @@ The 1-hour value is a reasonable default. The exact tolerance for stale pricing 
 
 ---
 
+### 5. Observability — Structured Logging
+
+All significant events are logged as JSON to `Rails.logger` for easy parsing by log aggregators (e.g., Datadog, CloudWatch).
+
+**Log events**
+
+| Event | Level | When |
+|---|---|---|
+| `pricing_cache` | `info` | Every request — includes `cache: "HIT"` or `"MISS"` |
+| `pricing_rate_limit` | `warn` | Upstream returns 429 and stale cache is served |
+| `pricing_rate_limit` | `error` | Upstream returns 429 and no stale cache available |
+| `pricing_upstream_timeout` | `error` | `Net::OpenTimeout` or `Net::ReadTimeout` |
+| `pricing_upstream_error` | `error` | Any other upstream failure — includes `error_class` and `message` |
+
+**Example log lines**
+
+```json
+{"event":"pricing_cache","cache":"MISS","period":"Summer","hotel":"FloatingPointResort","room":"SingletonRoom"}
+{"event":"pricing_cache","cache":"HIT","period":"Summer","hotel":"FloatingPointResort","room":"SingletonRoom"}
+{"event":"pricing_rate_limit","action":"served_stale","period":"Summer","hotel":"FloatingPointResort","room":"SingletonRoom"}
+{"event":"pricing_upstream_error","error_class":"RuntimeError","message":"Rate not found for the given parameters","period":"Summer","hotel":"FloatingPointResort","room":"SingletonRoom"}
+```
+
+**What is never logged:** The `RATE_API_TOKEN` value — it is read from an environment variable and never passed to the logger.
+
+---
+
 ## Assumptions
 
 - Service runs as a **single Puma process** (see cache store decision above)

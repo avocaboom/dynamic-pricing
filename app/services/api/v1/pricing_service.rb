@@ -16,24 +16,31 @@ module Api::V1
     def run
       cache_key = "pricing/v1/#{@period}/#{@hotel}/#{@room}"
       stale_key = "pricing/v1/stale/#{@period}/#{@hotel}/#{@room}"
+      cache_hit = true
 
       @result = Rails.cache.fetch(cache_key, expires_in: CACHE_TTL) do
+        cache_hit = false
         rate = fetch_from_upstream
         Rails.cache.write(stale_key, rate, expires_in: STALE_CACHE_TTL)
         rate
       end
+
+      Rails.logger.info({ event: "pricing_cache", cache: cache_hit ? "HIT" : "MISS", period: @period, hotel: @hotel, room: @room }.to_json)
     rescue RateLimitError
       stale = Rails.cache.read(stale_key)
       if stale
         @result = stale
         @served_stale = true
+        Rails.logger.warn({ event: "pricing_rate_limit", action: "served_stale", period: @period, hotel: @hotel, room: @room }.to_json)
       else
         self.http_status = :service_unavailable
         errors << "Pricing service rate limit reached and no cached data available. Please try again later."
+        Rails.logger.error({ event: "pricing_rate_limit", action: "no_stale_available", period: @period, hotel: @hotel, room: @room }.to_json)
       end
     rescue Net::OpenTimeout, Net::ReadTimeout
       self.http_status = :gateway_timeout
       errors << "Pricing service timed out. Please try again later."
+      Rails.logger.error({ event: "pricing_upstream_timeout", period: @period, hotel: @hotel, room: @room }.to_json)
     rescue => e
       self.http_status = :service_unavailable
       errors << "Pricing service is currently unavailable. Please try again later."
