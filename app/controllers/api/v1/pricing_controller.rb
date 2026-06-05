@@ -3,6 +3,7 @@ class Api::V1::PricingController < ApplicationController
   VALID_HOTELS = %w[FloatingPointResort GitawayHotel RecursionRetreat].freeze
   VALID_ROOMS = %w[SingletonRoom BooleanTwin RestfulKing].freeze
 
+  before_action :set_request_context
   before_action :validate_params
 
   def index
@@ -12,22 +13,30 @@ class Api::V1::PricingController < ApplicationController
 
     service = Api::V1::PricingService.new(period:, hotel:, room:)
     service.run
+
     if service.valid?
       render json: { rate: service.result }
     else
       render json: { error: service.errors.join(', ') }, status: service.http_status
     end
+  ensure
+    Thread.current[:request_id] = nil
   end
 
   private
 
+  # Propagate Rails' built-in request_id (UUID) via Thread.current so the service
+  # layer can include it in every log line without being passed as a parameter.
+  def set_request_context
+    Thread.current[:request_id] = request.request_id
+    response.set_header('X-Request-Id', request.request_id)
+  end
+
   def validate_params
-    # Validate required parameters
     unless params[:period].present? && params[:hotel].present? && params[:room].present?
       return render json: { error: "Missing required parameters: period, hotel, room" }, status: :bad_request
     end
 
-    # Validate parameter values
     unless VALID_PERIODS.include?(params[:period])
       return render json: { error: "Invalid period. Must be one of: #{VALID_PERIODS.join(', ')}" }, status: :bad_request
     end

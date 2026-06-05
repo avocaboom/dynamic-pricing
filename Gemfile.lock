@@ -115,6 +115,11 @@ GEM
       rb-fsevent (~> 0.10, >= 0.10.3)
       rb-inotify (~> 0.9, >= 0.9.10)
     logger (1.7.0)
+    lograge (0.14.0)
+      actionpack (>= 4)
+      activesupport (>= 4)
+      railties (>= 4)
+      request_store (~> 1.0)
     loofah (2.24.1)
       crass (~> 1.0.2)
       nokogiri (>= 1.12.0)
@@ -201,6 +206,8 @@ GEM
       psych (>= 4.0.0)
     reline (0.6.2)
       io-console (~> 0.5)
+    request_store (1.7.0)
+      rack (>= 1.4)
     securerandom (0.4.1)
     sqlite3 (2.7.3-aarch64-linux-musl)
     sqlite3 (2.7.3-x86_64-darwin)
@@ -226,6 +233,7 @@ DEPENDENCIES
   debug
   httparty
   listen (~> 3.3)
+  lograge
   puma (>= 5.0)
   rails (~> 7.1.5, >= 7.1.5.2)
   sqlite3 (>= 1.4)

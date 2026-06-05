@@ -29,6 +29,9 @@ gem "bootsnap", require: false
 # HTTP client for external API call
 gem 'httparty'
 
+# Replace verbose Rails request logging with one structured JSON line per request
+gem 'lograge'
+
 # Use Rack CORS for handling Cross-Origin Resource Sharing (CORS), making cross-origin Ajax possible
 # gem "rack-cors"
 

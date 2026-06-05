@@ -1,0 +1,260 @@
+{
+  "title": "Dynamic Pricing — Overview",
+  "uid": "dynamic-pricing",
+  "schemaVersion": 38,
+  "version": 8,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "request_id",
+        "label": "Request ID",
+        "type": "textbox",
+        "description": "Paste a request_id to trace a single request end-to-end"
+      }
+    ]
+  },
+  "panels": [
+
+    {
+      "id": 7,
+      "title": "Requests per Minute — by Endpoint",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum by (path) (count_over_time({job=\"rails\", msg=\"request\"} | json | __error__=\"\" [$__interval]))",
+          "legendFormat": "{{path}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+        }
+      },
+      "options": { "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 8,
+      "title": "Responses by HTTP Status Code",
+      "type": "timeseries",
+      "gridPos": { "x": 8, "y": 0, "w": 8, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum by (status) (count_over_time({job=\"rails\", msg=\"request\"} | json | __error__=\"\" | status != \"\" [$__interval]))",
+          "legendFormat": "HTTP {{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+        }
+      },
+      "options": { "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 12,
+      "title": "Latency (ms) — p50 / p95 / p99",
+      "description": "Request duration percentiles from Lograge duration field (ms).",
+      "type": "timeseries",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "max by () (quantile_over_time(0.50, {job=\"rails\", msg=\"request\"} | json | unwrap duration [$__interval]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "max by () (quantile_over_time(0.95, {job=\"rails\", msg=\"request\"} | json | unwrap duration [$__interval]))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "max by () (quantile_over_time(0.99, {job=\"rails\", msg=\"request\"} | json | unwrap duration [$__interval]))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+        }
+      },
+      "options": { "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 1,
+      "title": "Cache — Fresh HIT vs MISS (5-min TTL)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum by (cache) (count_over_time({job=\"rails\", msg=\"pricing_cache\"} [$__interval]))",
+          "legendFormat": "{{cache}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+        }
+      },
+      "options": { "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 9,
+      "title": "Cache — Stale Fallback (1-hour TTL)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "count_over_time({job=\"rails\", msg=\"stale_fallback\"} |= \"served_stale\" [$__interval])",
+          "legendFormat": "served stale"
+        },
+        {
+          "expr": "count_over_time({job=\"rails\", msg=\"stale_fallback\"} |= \"no_stale_available\" [$__interval])",
+          "legendFormat": "no stale — 503"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+        }
+      },
+      "options": { "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 2,
+      "title": "Upstream Calls",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 16, "w": 8, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "count_over_time({job=\"rails\", msg=\"upstream_call\"} |= \"\\\"status\\\":\\\"success\\\"\" [$__interval])",
+          "legendFormat": "success"
+        },
+        {
+          "expr": "count_over_time({job=\"rails\", msg=\"upstream_timeout\"} [$__interval])",
+          "legendFormat": "timeout"
+        },
+        {
+          "expr": "count_over_time({job=\"rails\", msg=\"upstream_call\"} |= \"rate_limited\" [$__interval])",
+          "legendFormat": "rate_limited"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+        }
+      },
+      "options": { "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 10,
+      "title": "Upstream Response by Status",
+      "type": "timeseries",
+      "gridPos": { "x": 8, "y": 16, "w": 8, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "count_over_time({job=\"rails\", msg=\"upstream_call\"} |= \"\\\"status\\\":\\\"success\\\"\" [$__interval])",
+          "legendFormat": "200 success"
+        },
+        {
+          "expr": "count_over_time({job=\"rails\", msg=\"upstream_call\"} |= \"rate_limited\" [$__interval])",
+          "legendFormat": "429 rate limited"
+        },
+        {
+          "expr": "count_over_time({job=\"rails\", msg=\"upstream_timeout\"} [$__interval])",
+          "legendFormat": "504 timeout"
+        },
+        {
+          "expr": "count_over_time({job=\"rails\", msg=\"upstream_error\"} [$__interval])",
+          "legendFormat": "5xx error"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+        }
+      },
+      "options": { "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 13,
+      "title": "Upstream Latency (ms) — p50 / p95 / p99",
+      "description": "Duration from upstream_call start to success, extracted from duration_ms field (ms).",
+      "type": "timeseries",
+      "gridPos": { "x": 16, "y": 16, "w": 8, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "max by () (quantile_over_time(0.50, {job=\"rails\", msg=\"upstream_call\"} | json | unwrap duration_ms [$__interval]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "max by () (quantile_over_time(0.95, {job=\"rails\", msg=\"upstream_call\"} | json | unwrap duration_ms [$__interval]))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "max by () (quantile_over_time(0.99, {job=\"rails\", msg=\"upstream_call\"} | json | unwrap duration_ms [$__interval]))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+        }
+      },
+      "options": { "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 5,
+      "title": "Request Flow Trace — filter by Request ID",
+      "description": "Paste a request_id above to trace a single request end-to-end. Leave empty to show all recent logs.",
+      "type": "logs",
+      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 12 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{job=\"rails\"} |= \"$request_id\"",
+          "legendFormat": ""
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending"
+      }
+    }
+
+  ]
+}

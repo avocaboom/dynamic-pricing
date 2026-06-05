@@ -14,3 +14,66 @@ services:
       - RATE_API_URL=http://rate-api:8080
     depends_on:
       - rate-api
+
+  # ---------------------------------------------------------------------------
+  # Monitoring stack — start with: docker compose --profile monitoring up -d
+  # Grafana dashboard: http://localhost:3001  (admin / admin)
+  # Prometheus:        http://localhost:9090
+  # ---------------------------------------------------------------------------
+
+  prometheus:
+    image: prom/prometheus:v2.50.1
+    profiles: [monitoring]
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=1d'
+
+  loki:
+    image: grafana/loki:2.9.4
+    profiles: [monitoring]
+    command: -config.file=/etc/loki/config.yml
+    volumes:
+      - ./observability/loki.yml:/etc/loki/config.yml
+    ports:
+      - "3100:3100"
+
+  promtail:
+    image: grafana/promtail:2.9.4
+    profiles: [monitoring]
+    volumes:
+      - ./observability/promtail.yml:/etc/promtail/config.yml
+      - ./log:/var/log/rails
+    depends_on:
+      - loki
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    profiles: [monitoring]
+    ports:
+      - "8090:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    privileged: true
+
+  grafana:
+    image: grafana/grafana:10.3.3
+    profiles: [monitoring]
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    depends_on:
+      - prometheus
+      - loki

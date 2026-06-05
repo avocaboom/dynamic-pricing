@@ -6,6 +6,8 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
     Rails.cache = ActiveSupport::Cache::MemoryStore.new
     ActionController::Base.perform_caching = true
 
+    Thread.current[:request_id] = "test-request-id"
+
     @log_output = StringIO.new
     @original_logger = Rails.logger
     Rails.logger = Logger.new(@log_output)
@@ -15,7 +17,17 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
     Rails.cache.clear
     Rails.cache = @original_cache
     ActionController::Base.perform_caching = false
+    Thread.current[:request_id] = nil
     Rails.logger = @original_logger
+  end
+
+  # --- request_id propagation ---
+
+  test "includes request_id in every log line" do
+    RateApiClient.stub(:get_rate, success_response) do
+      run_service
+    end
+    assert_log_contains('"request_id":"test-request-id"')
   end
 
   # --- Cache HIT / MISS logging ---
@@ -24,6 +36,7 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
     RateApiClient.stub(:get_rate, success_response) do
       run_service
     end
+    assert_log_contains('"msg":"pricing_cache"')
     assert_log_contains('"cache":"MISS"')
   end
 
@@ -34,16 +47,27 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
     assert_log_contains('"cache":"HIT"')
   end
 
-  test "logs event pricing_cache on every request" do
+  test "logs upstream_call start and success on cache MISS" do
     RateApiClient.stub(:get_rate, success_response) do
       run_service
     end
-    assert_log_contains('"event":"pricing_cache"')
+    assert_log_contains('"msg":"upstream_call"')
+    assert_log_contains('"status":"success"')
+    assert_log_contains('"duration_ms"')
+    assert_log_contains('"rate":"15000"')
   end
 
-  # --- Rate limit logging ---
+  test "logs cache_write after upstream success" do
+    RateApiClient.stub(:get_rate, success_response) do
+      run_service
+    end
+    assert_log_contains('"msg":"cache_write"')
+    assert_log_contains('"fresh_ttl_s":300')
+  end
 
-  test "logs warn with served_stale when 429 and stale cache exists" do
+  # --- Stale fallback logging ---
+
+  test "logs stale_fallback served_stale when 429 and stale exists" do
     RateApiClient.stub(:get_rate, success_response) do
       run_service
     end
@@ -55,35 +79,43 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
       end
     end
 
-    assert_log_contains('"event":"pricing_rate_limit"')
+    assert_log_contains('"msg":"stale_fallback"')
     assert_log_contains('"action":"served_stale"')
   end
 
-  test "logs error with no_stale_available when 429 and no stale cache" do
+  test "logs stale_fallback no_stale_available when 429 and no stale" do
     rate_limited = OpenStruct.new(success?: false, code: 429, body: "")
     RateApiClient.stub(:get_rate, rate_limited) do
       run_service
     end
 
-    assert_log_contains('"event":"pricing_rate_limit"')
+    assert_log_contains('"msg":"stale_fallback"')
     assert_log_contains('"action":"no_stale_available"')
+  end
+
+  test "logs upstream_call rate_limited on 429" do
+    rate_limited = OpenStruct.new(success?: false, code: 429, body: "")
+    RateApiClient.stub(:get_rate, rate_limited) do
+      run_service
+    end
+    assert_log_contains('"status":"rate_limited"')
   end
 
   # --- Upstream error logging ---
 
-  test "logs upstream timeout error" do
+  test "logs upstream_timeout on ReadTimeout" do
     RateApiClient.stub(:get_rate, -> (*) { raise Net::ReadTimeout }) do
       run_service
     end
-    assert_log_contains('"event":"pricing_upstream_timeout"')
+    assert_log_contains('"msg":"upstream_timeout"')
   end
 
-  test "logs upstream error with error_class and message" do
+  test "logs upstream_error with error_class on upstream failure" do
     mock_error = OpenStruct.new(success?: false, code: 503, body: "")
     RateApiClient.stub(:get_rate, mock_error) do
       run_service
     end
-    assert_log_contains('"event":"pricing_upstream_error"')
+    assert_log_contains('"msg":"upstream_error"')
     assert_log_contains('"error_class"')
   end
 

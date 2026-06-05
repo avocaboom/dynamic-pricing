@@ -10,6 +10,10 @@ A Ruby on Rails API service that acts as a caching proxy for an expensive ML-bas
 # Build and start all services (app on :3000, rate-api on :8080)
 docker compose up -d --build
 
+# Enable caching in development (required — caching is off by default in Rails development mode)
+docker compose exec interview-dev ./bin/rails dev:cache
+docker compose restart interview-dev
+
 # Sample request
 curl 'http://localhost:3000/api/v1/pricing?period=Summer&hotel=FloatingPointResort&room=SingletonRoom'
 
@@ -19,6 +23,19 @@ docker compose exec interview-dev ./bin/rails test
 # Run specific test file
 docker compose exec interview-dev ./bin/rails test test/controllers/pricing_controller_test.rb
 ```
+
+### With monitoring stack (optional)
+
+```bash
+# Start everything including Grafana, Prometheus, Tempo, Loki
+docker compose --profile monitoring up -d --build
+
+# Grafana dashboard  → http://localhost:3001  (admin / admin)
+# Prometheus         → http://localhost:9090
+# Tempo (traces)     → http://localhost:3200
+```
+
+Every response includes an `X-Trace-Id` header — paste it into Grafana → Explore → Tempo to see the full request trace.
 
 ---
 

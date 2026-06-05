@@ -1,0 +1,40 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: rails
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: rails
+          __path__: /var/log/rails/development.log
+
+    pipeline_stages:
+      # Lograge removes the "I, [timestamp] INFO -- :" prefix so log lines are
+      # now pure JSON objects. Match any line that starts with "{".
+      - regex:
+          expression: '^(?P<json_payload>\{.+\})\s*$'
+
+      # Extract indexable fields. "level" is already lowercase ("info"/"warn"/"error").
+      - json:
+          source: json_payload
+          expressions:
+            level: level
+            msg:   msg
+            cache: cache
+
+      # Promote as Loki stream labels.
+      # request_id intentionally excluded — UUIDs are high-cardinality.
+      # Filter by request_id using |= content search in Grafana queries.
+      - labels:
+          level:
+          msg:
+          cache:
