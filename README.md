@@ -378,7 +378,7 @@ On every service restart, `MemoryStore` is wiped — all 36 cache keys (fresh + 
 - Cache warming on startup: pre-populate all 36 combinations during `config/initializers` or a startup task
 - Rate-paced warm-up: spread the 36 upstream calls over the first TTL window to avoid burst
 
-### 5. MemoryStore memory limit
+### 6. MemoryStore memory limit
 
 Rails `MemoryStore` defaults to a **32MB cap**. When the limit is reached, Rails evicts the least-recently-used entries silently — no error, no warning, just a cache miss.
 

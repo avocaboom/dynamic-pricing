@@ -2,7 +2,7 @@
   "title": "Dynamic Pricing — Overview",
   "uid": "dynamic-pricing",
   "schemaVersion": 38,
-  "version": 8,
+  "version": 10,
   "refresh": "10s",
   "time": { "from": "now-1h", "to": "now" },
   "templating": {
@@ -20,14 +20,13 @@
         "description": "Filter logs by severity level",
         "query": "info,warn,error",
         "options": [
-          { "text": "All",   "value": "$__all", "selected": true },
-          { "text": "info",  "value": "info",   "selected": false },
-          { "text": "warn",  "value": "warn",   "selected": false },
-          { "text": "error", "value": "error",  "selected": false }
+          { "text": "All",   "value": "info|warn|error", "selected": true },
+          { "text": "info",  "value": "info",            "selected": false },
+          { "text": "warn",  "value": "warn",            "selected": false },
+          { "text": "error", "value": "error",           "selected": false }
         ],
-        "current": { "text": "All", "value": "$__all" },
-        "includeAll": true,
-        "allValue": "info|warn|error",
+        "current": { "text": "All", "value": "info|warn|error" },
+        "includeAll": false,
         "multi": false,
         "hide": 0
       }
