@@ -12,6 +12,8 @@ services:
       - .:/rails
     environment:
       - RATE_API_URL=http://rate-api:8080
+      - CACHE_TTL_SECONDS=${CACHE_TTL_SECONDS:-300}
+      - STALE_CACHE_TTL_SECONDS=${STALE_CACHE_TTL_SECONDS:-3600}
     depends_on:
       - rate-api
 

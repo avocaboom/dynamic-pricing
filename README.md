@@ -36,6 +36,41 @@ docker compose --profile monitoring up -d --build
 
 Every response includes an `X-Request-Id` header. Paste the value into the **Request Flow Trace** panel in Grafana to filter all log lines for that single request end-to-end.
 
+### E2E load test (optional)
+
+Simulates realistic production traffic across a full 5-minute TTL cycle and all failure scenarios. Requires the monitoring stack to be running.
+
+```bash
+bash test/e2e/load_test.sh
+```
+
+The script uses shortened TTLs to keep total runtime under 10 minutes. The production defaults are automatically restored when the test completes.
+
+| | Load test | Production default |
+|---|---|---|
+| `CACHE_TTL_SECONDS` | 180s (3 min) | 300s (5 min) |
+| `STALE_CACHE_TTL_SECONDS` | 300s (5 min) | 3600s (1 hour) |
+
+**Duration:** ~10 minutes total. **What it runs:**
+
+| Phase | Duration | Description |
+|---|---|---|
+| 1 — TTL cycle | 4 min | 72 req/min (36 combinations × 2). Upstream called only on minute 1 and minute 4 (TTL expiry at 3 min). |
+| 2 — Upstream timeout | ~1 min | Clears cache, pauses rate-api → all requests return `504 Gateway Timeout`. |
+| 3 — Stale fallback | ~4 min | Warms cache slowly, waits 3 min for TTL to expire, exhausts token rate limit → requests return stale rate (`200`) instead of `503`. |
+
+**What to watch in Grafana (`http://localhost:3001`):**
+
+| Panel | What to look for |
+|---|---|
+| Cache HIT vs MISS | 36 MISSes on minute 1, flat (all HIT) on minutes 2–3, 36 MISSes again on minute 4 |
+| Requests per Minute | ~72 req/min across Phase 1, then spikes in Phase 2–3 |
+| Upstream Calls | Spike on minute 1, flat on minutes 2–3, spike on minute 4, timeout on Phase 2 |
+| Responses by Status | Mostly `200`, `504` spike in Phase 2 |
+| Upstream Response by Status | `success` / `504 timeout` / `429 rate_limited` across phases |
+| Cache Stale Fallback | `served_stale` events in Phase 3 |
+| Request Flow Trace | Paste any `X-Request-Id` to trace a single request end-to-end |
+
 ---
 
 ## API
@@ -200,8 +235,8 @@ The service uses two cache keys per unique `(period, hotel, room)` combination:
 
 | Key | TTL | Purpose |
 |---|---|---|
-| `pricing/v1/{period}/{hotel}/{room}` | 5 minutes | Fresh rate served to users |
-| `pricing/v1/stale/{period}/{hotel}/{room}` | 1 hour | Fallback when upstream hits rate limit |
+| `pricing/v1/{period}/{hotel}/{room}` | `CACHE_TTL_SECONDS` (default 5 min) | Fresh rate served to users |
+| `pricing/v1/stale/{period}/{hotel}/{room}` | `STALE_CACHE_TTL_SECONDS` (default 1 hour) | Fallback when upstream hits rate limit |
 
 On every successful upstream call, both keys are written. On cache miss, the fresh key is fetched from upstream and both keys are refreshed.
 

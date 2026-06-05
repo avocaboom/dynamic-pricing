@@ -1,7 +1,7 @@
 module Api::V1
   class PricingService < BaseService
-    CACHE_TTL       = 5.minutes
-    STALE_CACHE_TTL = 1.hour
+    CACHE_TTL       = ENV.fetch("CACHE_TTL_SECONDS",       300).to_i.seconds
+    STALE_CACHE_TTL = ENV.fetch("STALE_CACHE_TTL_SECONDS", 3600).to_i.seconds
 
     RateLimitError = Class.new(StandardError)
 
@@ -27,24 +27,28 @@ module Api::V1
 
       log_info(event: "pricing_cache", cache: "HIT") if cache_hit
     rescue RateLimitError
-      stale = Rails.cache.read(stale_key)
-      if stale
-        @result = stale
-        @served_stale = true
-        log_warn(event: "stale_fallback", action: "served_stale")
-      else
-        self.http_status = :service_unavailable
-        errors << "Pricing service rate limit reached and no cached data available. Please try again later."
-        log_error(event: "stale_fallback", action: "no_stale_available")
-      end
+      serve_stale_or_error(
+        stale_key:      stale_key,
+        fallback_status: :service_unavailable,
+        error_message:  "Pricing service rate limit reached and no cached data available. Please try again later.",
+        log_event:      "stale_fallback"
+      )
     rescue Net::OpenTimeout, Net::ReadTimeout
-      self.http_status = :gateway_timeout
-      errors << "Pricing service timed out. Please try again later."
       log_error(event: "upstream_timeout")
+      serve_stale_or_error(
+        stale_key:       stale_key,
+        fallback_status: :gateway_timeout,
+        error_message:   "Pricing service timed out. Please try again later.",
+        log_event:       "stale_fallback"
+      )
     rescue => e
-      self.http_status = :service_unavailable
-      errors << "Pricing service is currently unavailable. Please try again later."
       log_error(event: "upstream_error", error_class: e.class.name, message: e.message)
+      serve_stale_or_error(
+        stale_key:       stale_key,
+        fallback_status: :service_unavailable,
+        error_message:   "Pricing service is currently unavailable. Please try again later.",
+        log_event:       "stale_fallback"
+      )
     end
 
     def served_stale?
@@ -52,6 +56,19 @@ module Api::V1
     end
 
     private
+
+    def serve_stale_or_error(stale_key:, fallback_status:, error_message:, log_event:)
+      stale = Rails.cache.read(stale_key)
+      if stale
+        @result = stale
+        @served_stale = true
+        log_warn(event: log_event, action: "served_stale")
+      else
+        self.http_status = fallback_status
+        errors << error_message
+        log_error(event: log_event, action: "no_stale_available")
+      end
+    end
 
     def fetch_from_upstream
       started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)

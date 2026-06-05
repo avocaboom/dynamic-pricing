@@ -62,7 +62,7 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
       run_service
     end
     assert_log_contains('"msg":"cache_write"')
-    assert_log_contains('"fresh_ttl_s":300')
+    assert_log_contains("\"fresh_ttl_s\":#{Api::V1::PricingService::CACHE_TTL.to_i}")
   end
 
   # --- Stale fallback logging ---
@@ -73,7 +73,7 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
     end
 
     rate_limited = OpenStruct.new(success?: false, code: 429, body: "")
-    travel 6.minutes do
+    travel(Api::V1::PricingService::CACHE_TTL + 1.minute) do
       RateApiClient.stub(:get_rate, rate_limited) do
         run_service
       end
@@ -110,7 +110,7 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
 
     rate_limited = OpenStruct.new(success?: false, code: 429, body: "")
     service = nil
-    travel 6.minutes do
+    travel(Api::V1::PricingService::CACHE_TTL + 1.minute) do
       RateApiClient.stub(:get_rate, rate_limited) do
         service = build_service
         service.run
@@ -132,7 +132,7 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
 
     rate_limited = OpenStruct.new(success?: false, code: 429, body: "")
     service = nil
-    travel 6.minutes do
+    travel(Api::V1::PricingService::CACHE_TTL + 1.minute) do
       RateApiClient.stub(:get_rate, rate_limited) do
         service = build_service
         service.run
@@ -192,7 +192,7 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
 
   # --- Upstream timeout behavior ---
 
-  test "is invalid with 504 status on Net::ReadTimeout" do
+  test "is invalid with 504 status on Net::ReadTimeout when no stale exists" do
     service = build_service
     RateApiClient.stub(:get_rate, -> (*) { raise Net::ReadTimeout }) do
       service.run
@@ -203,7 +203,7 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
     assert_includes service.errors.first, "timed out"
   end
 
-  test "is invalid with 504 status on Net::OpenTimeout" do
+  test "is invalid with 504 status on Net::OpenTimeout when no stale exists" do
     service = build_service
     RateApiClient.stub(:get_rate, -> (*) { raise Net::OpenTimeout }) do
       service.run
@@ -214,22 +214,41 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
     assert_includes service.errors.first, "timed out"
   end
 
-  test "timeout does not serve stale — stale is only for rate limit" do
+  test "serves stale on Net::ReadTimeout when stale cache exists" do
     RateApiClient.stub(:get_rate, success_response) do
       run_service
     end
 
     service = nil
-    travel 6.minutes do
+    travel(Api::V1::PricingService::CACHE_TTL + 1.minute) do
       RateApiClient.stub(:get_rate, -> (*) { raise Net::ReadTimeout }) do
         service = build_service
         service.run
       end
     end
 
-    refute service.valid?, "timeout should not fall back to stale cache"
-    assert_equal :gateway_timeout, service.http_status
-    refute service.served_stale?
+    assert service.valid?, "should serve stale when timeout and stale exists"
+    assert_equal "15000", service.result
+    assert service.served_stale?
+  end
+
+  test "serves stale on upstream error (non-429, non-timeout) when stale cache exists" do
+    RateApiClient.stub(:get_rate, success_response) do
+      run_service
+    end
+
+    mock_error = OpenStruct.new(success?: false, code: 503, body: "")
+    service = nil
+    travel(Api::V1::PricingService::CACHE_TTL + 1.minute) do
+      RateApiClient.stub(:get_rate, mock_error) do
+        service = build_service
+        service.run
+      end
+    end
+
+    assert service.valid?, "should serve stale when upstream 503 and stale exists"
+    assert_equal "15000", service.result
+    assert service.served_stale?
   end
 
   # --- Token safety ---

@@ -83,12 +83,12 @@ class Api::V1::PricingControllerTest < ActionDispatch::IntegrationTest
     assert_equal 2, call_count
   end
 
-  test "does not call upstream within TTL window (cache still valid at 4 minutes)" do
+  test "does not call upstream within TTL window (cache still valid before TTL expires)" do
     call_count = 0
     RateApiClient.stub(:get_rate, ->(*) { call_count += 1; success_response }) do
       get api_v1_pricing_url, params: valid_params
 
-      travel 4.minutes do
+      travel(Api::V1::PricingService::CACHE_TTL - 1.minute) do
         get api_v1_pricing_url, params: valid_params
       end
     end
@@ -100,7 +100,7 @@ class Api::V1::PricingControllerTest < ActionDispatch::IntegrationTest
     RateApiClient.stub(:get_rate, ->(*) { call_count += 1; success_response }) do
       get api_v1_pricing_url, params: valid_params
 
-      travel 6.minutes do
+      travel(Api::V1::PricingService::CACHE_TTL + 1.minute) do
         get api_v1_pricing_url, params: valid_params
       end
     end
@@ -116,7 +116,7 @@ class Api::V1::PricingControllerTest < ActionDispatch::IntegrationTest
 
   # --- Error handling ---
 
-  test "returns 503 when upstream is unavailable" do
+  test "returns 503 when upstream is unavailable and no stale exists" do
     mock_error = OpenStruct.new(success?: false, code: 503, body: { "error" => "Service error" })
     RateApiClient.stub(:get_rate, mock_error) do
       get api_v1_pricing_url, params: valid_params
@@ -125,11 +125,40 @@ class Api::V1::PricingControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
-  test "returns 504 when upstream times out" do
+  test "returns stale rate when upstream is unavailable and stale exists" do
+    RateApiClient.stub(:get_rate, success_response) do
+      get api_v1_pricing_url, params: valid_params
+    end
+
+    mock_error = OpenStruct.new(success?: false, code: 503, body: "")
+    travel(Api::V1::PricingService::CACHE_TTL + 1.minute) do
+      RateApiClient.stub(:get_rate, mock_error) do
+        get api_v1_pricing_url, params: valid_params
+        assert_response :success
+        assert_equal "15000", json_response["rate"]
+      end
+    end
+  end
+
+  test "returns 504 when upstream times out and no stale exists" do
     RateApiClient.stub(:get_rate, ->(*) { raise Net::ReadTimeout }) do
       get api_v1_pricing_url, params: valid_params
       assert_response :gateway_timeout
       assert_includes json_response["error"], "timed out"
+    end
+  end
+
+  test "returns stale rate when upstream times out and stale exists" do
+    RateApiClient.stub(:get_rate, success_response) do
+      get api_v1_pricing_url, params: valid_params
+    end
+
+    travel(Api::V1::PricingService::CACHE_TTL + 1.minute) do
+      RateApiClient.stub(:get_rate, ->(*) { raise Net::ReadTimeout }) do
+        get api_v1_pricing_url, params: valid_params
+        assert_response :success
+        assert_equal "15000", json_response["rate"]
+      end
     end
   end
 
@@ -182,7 +211,7 @@ class Api::V1::PricingControllerTest < ActionDispatch::IntegrationTest
 
     # After TTL, fresh cache expires — upstream returns 429
     rate_limited = OpenStruct.new(success?: false, code: 429, body: "")
-    travel 6.minutes do
+    travel(Api::V1::PricingService::CACHE_TTL + 1.minute) do
       RateApiClient.stub(:get_rate, rate_limited) do
         get api_v1_pricing_url, params: valid_params
         assert_response :success
