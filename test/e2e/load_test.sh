@@ -119,18 +119,33 @@ echo ""
 
 for minute in $(seq 1 4); do
   if [[ $minute -eq 1 ]]; then
-    echo -e "  ${BLUE}[Minute $minute]${NC} Cold start — cache empty, all 36 hit upstream (MISS)"
+    echo -e "  ${BLUE}[Minute $minute]${NC} Cold start — warming all 36 at 1 req/sec to avoid rate limit"
+
+    # Warm up slowly so all 36 get cached before rate limit kicks in
+    declare -i warm_ok=0 warm_fail=0
+    for period in "${PERIODS[@]}"; do
+      for hotel in "${HOTELS[@]}"; do
+        for room in "${ROOMS[@]}"; do
+          request "$period" "$hotel" "$room"
+          if [[ "$LAST_STATUS" == "200" ]]; then ((warm_ok++)); else ((warm_fail++)); fi
+          sleep 1
+        done
+      done
+    done
+    echo -e "    Warm-up: ${GREEN}${warm_ok} cached${NC} / ${RED}${warm_fail} failed${NC}"
+    echo -e "    ${DIM}2nd sweep — verify all cached:${NC}"
+    one_pass "  36 req (2nd sweep — should be all HIT)"
+
   elif [[ $minute -eq 4 ]]; then
     echo -e "  ${YELLOW}[Minute $minute]${NC} TTL expired (3 min) — cache stale, upstream called again"
+    one_pass "  36 req (1st sweep — MISS, upstream called)"
+    one_pass "  36 req (2nd sweep — all HIT, just cached above)"
+
   else
     echo -e "  ${BLUE}[Minute $minute]${NC} Within TTL — served from cache (0 upstream calls)"
+    one_pass "  36 req (1st sweep — all HIT)"
+    one_pass "  36 req (2nd sweep — all HIT)"
   fi
-
-  # Each minute: send 36 combinations twice = 72 requests
-  # First 36: MISS on min 1 & 4 (expired), HIT on min 2-3
-  # Second 36: always HIT (just cached by first 36)
-  one_pass "  36 req (1st sweep — MISS min1/4, HIT min2-3)"
-  one_pass "  36 req (2nd sweep — all HIT, just cached above)"
   stats
 
   if [[ $minute -lt 4 ]]; then
@@ -217,14 +232,15 @@ echo ""
 
 (
   sleep 20
-  echo -e "\n  ${YELLOW}[bg] Sending 300 direct requests to rate-api to exhaust token...${NC}"
+  echo -e "\n  ${YELLOW}[bg] Sending 300 concurrent requests to rate-api to exhaust token...${NC}"
   for i in $(seq 1 300); do
-    curl -s -X POST "${RATE_API_DIRECT}/pricing" \
+    curl -s -m 3 -X POST "${RATE_API_DIRECT}/pricing" \
       -H "token: ${RATE_API_TOKEN}" \
       -H "Content-Type: application/json" \
       -d '{"period":"Summer","hotel":"FloatingPointResort","room":"SingletonRoom"}' \
-      -o /dev/null
+      -o /dev/null &
   done
+  wait
   echo -e "  ${YELLOW}[bg] Done. Token rate limit exhausted.${NC}\n"
 ) &
 EXHAUST_PID=$!
@@ -235,7 +251,9 @@ for remaining in $(seq $TEST_CACHE_TTL -15 15); do
 done
 echo -ne "  TTL countdown: 0s — fresh cache has expired!     \n"
 
-wait $EXHAUST_PID 2>/dev/null
+# Give exhaust job a few seconds to finish if still running, then move on
+wait $EXHAUST_PID 2>/dev/null &
+sleep 5
 echo ""
 
 # Step 3d: send requests through app

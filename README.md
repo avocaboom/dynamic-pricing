@@ -267,12 +267,16 @@ This assumes all 36 combinations are actively requested throughout the day. The 
 
 | Condition | Behavior |
 |---|---|
-| Upstream error / timeout | Error returned to client. Stale **not** served — error codes and status mapping are in Section 2. |
-| HTTP 429 (rate limit) + stale exists | Serve stale rate silently. User gets a response; rate is ≤ 1 hour old. |
-| HTTP 429 (rate limit) + no stale | Return 503. Occurs only on the very first request for this key, or after the stale TTL also expires. |
+| Any upstream error + stale exists | Serve stale rate silently (`200`). Covers 429, timeout, 503, and all other errors. |
+| Any upstream error + no stale | Return error to client (`503` or `504` depending on error type). |
 
-**Why serve stale only on 429, not on all errors?**
-Rate limit (429) is predictable and temporary — the upstream is healthy but throttling us. Serving slightly stale data is a reasonable trade-off. Other errors (timeout, 503) indicate the upstream may be returning incorrect data, so stale fallback would be misleading.
+**Why serve stale for all upstream errors (not just 429)?**
+This is a **business decision** — both behaviors are technically valid:
+
+- **Serve stale (current implementation):** Keeps the service available during upstream incidents. Acceptable if slightly outdated rates are tolerable — e.g., for display purposes where the user is not immediately transacting.
+- **Return error on non-429:** Safer if rate accuracy is critical — e.g., when the rate is used directly in a booking transaction where a stale price could cause financial discrepancy.
+
+The current implementation favors availability over strict accuracy. If the business requires rate freshness guarantees, stale fallback should be restricted to 429 only, and the stale TTL should be shortened accordingly.
 
 **Stale TTL (1 hour) — business decision pending:**
 The 1-hour value is a reasonable default. The exact tolerance for stale pricing data should be determined based on business requirements (e.g., how often do hotel rates actually change in practice).
@@ -315,6 +319,52 @@ All events are logged as single-line JSON using [Lograge](https://github.com/roi
 ```
 
 **What is never logged:** The `RATE_API_TOKEN` value — it is read from an environment variable and never passed to the logger.
+
+---
+
+## Known Scaling Considerations
+
+These are not bugs or missing features — they are deliberate trade-offs acceptable at 10k req/day on a single process. Each item describes when it becomes relevant and what the migration path looks like.
+
+### 1. Multi-process / horizontal scale → MemoryStore cache not shared
+
+`MemoryStore` is in-process only. With `WEB_CONCURRENCY > 1` or multiple instances, each process has its own cache. Upstream call volume multiplies proportionally, risking rate limit violations.
+
+**Migration:** Replace `MemoryStore` with `RedisCache` — no application code changes needed, only config. See Design Decision 3.
+
+### 2. Request coalescing (thundering herd)
+
+When multiple concurrent requests arrive for the same `(period, hotel, room)` key at the exact moment the cache is cold (MISS), each request independently calls upstream — duplicating calls.
+
+At 10k req/day across 36 combinations, the probability of two requests colliding within the ~100ms upstream window is near zero. At significantly higher traffic (hundreds of req/sec per key), this becomes a real concern.
+
+**Migration path:** Add a per-key `Mutex` (in-process) or a Redis-based distributed lock (multi-process). The lock holder fetches upstream; all waiters read from cache once the lock is released.
+
+### 3. Circuit breaker
+
+If the upstream is persistently down, every cache MISS results in a 5-second timeout — tying up a Puma thread for each request. At low concurrency this is safe; at high concurrency it risks thread pool exhaustion.
+
+At 10k req/day on a single process, concurrent upstream calls are rare. The stale fallback already absorbs most failure scenarios.
+
+**Migration path:** Introduce a circuit breaker (e.g., `gem "stoplight"`) around `RateApiClient.get_rate`. When the upstream error rate exceeds a threshold, the circuit opens and requests fail fast — returning stale immediately without waiting for a timeout.
+
+### 4. Cold start spike
+
+On every service restart, `MemoryStore` is wiped — all 36 cache keys (fresh + stale) are lost. If all 36 combinations are requested within the first 5 minutes after restart, this produces a burst of up to 36 upstream calls in rapid succession, which may trigger the upstream rate limit depending on how tight it is.
+
+**Current behavior:** The first 36 requests after restart all hit upstream. If the rate limit is hit mid-burst, affected combinations return `503 Service Unavailable` to the client — this is a visible error with no fallback, since the stale cache has also been wiped on restart. Subsequent requests for the same key will recover once at least one upstream call succeeds and repopulates the cache.
+
+**Mitigation options (not implemented):**
+- Cache warming on startup: pre-populate all 36 combinations during `config/initializers` or a startup task
+- Rate-paced warm-up: spread the 36 upstream calls over the first TTL window to avoid burst
+
+### 5. MemoryStore memory limit
+
+Rails `MemoryStore` defaults to a **32MB cap**. When the limit is reached, Rails evicts the least-recently-used entries silently — no error, no warning, just a cache miss.
+
+For this service: 36 combinations × 2 keys (fresh + stale) × ~200 bytes per entry ≈ **~15KB total**. This is negligible and will never approach the 32MB limit given the current parameter space.
+
+**When it becomes relevant:** If the parameter space grows significantly (more hotels, rooms, or periods), or if `Rails.cache` is shared with other parts of the application for larger payloads, the limit should be monitored. The cap is configurable: `config.cache_store = :memory_store, { size: 64.megabytes }`.
 
 ---
 
