@@ -38,26 +38,27 @@ Every response includes an `X-Request-Id` header. Paste the value into the **Req
 
 ### E2E load test (optional)
 
-Simulates realistic production traffic across a full 5-minute TTL cycle and all failure scenarios. Requires the monitoring stack to be running.
+Simulates realistic production traffic across a full 5-minute TTL cycle, all failure scenarios, and a concurrency stress test. Requires the monitoring stack to be running.
 
 ```bash
 bash test/e2e/load_test.sh
 ```
 
-The script uses shortened TTLs to keep total runtime under 10 minutes. The production defaults are automatically restored when the test completes.
+The script uses shortened TTLs to keep total runtime manageable. The production defaults are automatically restored when the test completes.
 
 | | Load test | Production default |
 |---|---|---|
 | `CACHE_TTL_SECONDS` | 180s (3 min) | 300s (5 min) |
 | `STALE_CACHE_TTL_SECONDS` | 300s (5 min) | 3600s (1 hour) |
 
-**Duration:** ~10 minutes total. **What it runs:**
+**What it runs:**
 
 | Phase | Duration | Description |
 |---|---|---|
-| 1 — TTL cycle | 4 min | 72 req/min (36 combinations × 2). Upstream called only on minute 1 and minute 4 (TTL expiry at 3 min). |
+| 1 — TTL cycle | ~4 min | 72 req/min (36 combinations × 2). Upstream called only on minute 1 and minute 4 (TTL expiry at 3 min). |
 | 2 — Upstream timeout | ~1 min | Clears cache, pauses rate-api → all requests return `504 Gateway Timeout`. |
 | 3 — Stale fallback | ~4 min | Warms cache slowly, waits 3 min for TTL to expire, exhausts token rate limit → requests return stale rate (`200`) instead of `503`. |
+| 4 — Concurrency / capacity | ~2 min | **4a:** 50 concurrent requests to a single cold key — verifies upstream called exactly once (mutex coalescing). **4b:** Pre-warmed cache burst at 10 / 50 / 100 / 500 concurrent — measures avg latency per level. |
 
 **What to watch in Grafana (`http://localhost:3001`):**
 
@@ -69,6 +70,7 @@ The script uses shortened TTLs to keep total runtime under 10 minutes. The produ
 | Responses by Status | Mostly `200`, `504` spike in Phase 2 |
 | Upstream Response by Status | `success` / `504 timeout` / `429 rate_limited` across phases |
 | Cache Stale Fallback | `served_stale` events in Phase 3 |
+| Upstream Calls (Phase 4a) | Exactly 1 `upstream_call` log for Summer/FloatingPointResort/SingletonRoom during the 50-concurrent burst — confirms mutex prevented thundering herd |
 | Request Flow Trace | Paste any `X-Request-Id` to trace a single request end-to-end |
 
 ---
@@ -322,6 +324,36 @@ All events are logged as single-line JSON using [Lograge](https://github.com/roi
 
 ---
 
+### 6. Request coalescing — per-key Mutex with double-checked locking
+
+When concurrent requests hit the same cold cache key, each would independently call upstream without coordination. `PricingService` prevents this with a per-key `Mutex` — only the first thread calls upstream, the rest wait and read from cache.
+
+```ruby
+LOCKS = Concurrent::Map.new
+
+# Fast path — skip lock entirely on cache hit (the common case)
+cached = Rails.cache.read(cache_key)
+return @result = cached if cached
+
+# Slow path — serialize upstream calls per key
+lock = LOCKS.compute_if_absent(cache_key) { Mutex.new }
+lock.synchronize do
+  cached = Rails.cache.read(cache_key)  # double-check after acquiring lock
+  return @result = cached if cached
+
+  rate = fetch_from_upstream
+  Rails.cache.write(cache_key, rate, expires_in: CACHE_TTL)
+  @result = rate
+end
+```
+
+- **Double-check inside the lock** — two threads can both read MISS before either acquires the lock. The second thread re-reads cache after acquiring the lock and finds a HIT, skipping the upstream call.
+- **Bounded** — `LOCKS` grows to at most 36 entries (4 × 3 × 3). No memory leak risk.
+
+**Remaining limitation:** `Mutex` is in-process only — coalescing does not apply across Puma workers or multiple instances. Migration path: Redis-based distributed lock, no logic changes needed.
+
+---
+
 ## Known Scaling Considerations
 
 These are not bugs or missing features — they are deliberate trade-offs acceptable at 10k req/day on a single process. Each item describes when it becomes relevant and what the migration path looks like.
@@ -332,15 +364,7 @@ These are not bugs or missing features — they are deliberate trade-offs accept
 
 **Migration:** Replace `MemoryStore` with `RedisCache` — no application code changes needed, only config. See Design Decision 3.
 
-### 2. Request coalescing (thundering herd)
-
-When multiple concurrent requests arrive for the same `(period, hotel, room)` key at the exact moment the cache is cold (MISS), each request independently calls upstream — duplicating calls.
-
-At 10k req/day across 36 combinations, the probability of two requests colliding within the ~100ms upstream window is near zero. At significantly higher traffic (hundreds of req/sec per key), this becomes a real concern.
-
-**Migration path:** Add a per-key `Mutex` (in-process) or a Redis-based distributed lock (multi-process). The lock holder fetches upstream; all waiters read from cache once the lock is released.
-
-### 3. Circuit breaker
+### 2. Circuit breaker
 
 If the upstream is persistently down, every cache MISS results in a 5-second timeout — tying up a Puma thread for each request. At low concurrency this is safe; at high concurrency it risks thread pool exhaustion.
 
@@ -348,7 +372,7 @@ At 10k req/day on a single process, concurrent upstream calls are rare. The stal
 
 **Migration path:** Introduce a circuit breaker (e.g., `gem "stoplight"`) around `RateApiClient.get_rate`. When the upstream error rate exceeds a threshold, the circuit opens and requests fail fast — returning stale immediately without waiting for a timeout.
 
-### 4. Synchronized cache expiry
+### 3. Synchronized cache expiry
 
 When all 36 combinations are cached at the same time (e.g., after a cold start), they all expire at the same time — producing a predictable upstream call spike every 5 minutes.
 
@@ -368,7 +392,7 @@ expires_in: CACHE_TTL - 30.seconds + rand(60).seconds  # ±30s around TTL
 
 This distributes upstream calls evenly instead of batching them.
 
-### 5. Cold start spike
+### 4. Cold start spike
 
 On every service restart, `MemoryStore` is wiped — all 36 cache keys (fresh + stale) are lost. If all 36 combinations are requested within the first 5 minutes after restart, this produces a burst of up to 36 upstream calls in rapid succession, which may trigger the upstream rate limit depending on how tight it is.
 
@@ -378,7 +402,7 @@ On every service restart, `MemoryStore` is wiped — all 36 cache keys (fresh + 
 - Cache warming on startup: pre-populate all 36 combinations during `config/initializers` or a startup task
 - Rate-paced warm-up: spread the 36 upstream calls over the first TTL window to avoid burst
 
-### 6. MemoryStore memory limit
+### 5. MemoryStore memory limit
 
 Rails `MemoryStore` defaults to a **32MB cap**. When the limit is reached, Rails evicts the least-recently-used entries silently — no error, no warning, just a cache miss.
 
