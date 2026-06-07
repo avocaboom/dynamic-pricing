@@ -400,9 +400,13 @@ This distributes upstream calls evenly instead of batching them.
 
 On every service restart, `MemoryStore` is wiped — all 36 cache keys (fresh + stale) are lost. If all 36 combinations are requested within the first 5 minutes after restart, this produces a burst of up to 36 upstream calls in rapid succession, which may trigger the upstream rate limit depending on how tight it is.
 
-**Current behavior:** The first 36 requests after restart all hit upstream. If the rate limit is hit mid-burst, affected combinations return `503 Service Unavailable` to the client — this is a visible error with no fallback, since the stale cache has also been wiped on restart. Subsequent requests for the same key will recover once at least one upstream call succeeds and repopulates the cache.
+**Current behavior:** The first request per key after restart hits upstream. If the rate limit is hit mid-burst, affected combinations return `503 Service Unavailable` — no fallback, since stale cache is also wiped on restart.
 
-**Mitigation options (not implemented):**
+**Partial mitigation (implemented):** The per-key mutex ensures that concurrent requests for the **same key** during cold start only produce one upstream call — not N. This covers the thundering herd within a single key.
+
+**Remaining gap:** If all 36 keys are requested simultaneously after restart, there will still be up to 36 concurrent upstream calls — one per key. The mutex cannot coalesce across different keys.
+
+**Further mitigation options (not implemented):**
 - Cache warming on startup: pre-populate all 36 combinations during `config/initializers` or a startup task
 - Rate-paced warm-up: spread the 36 upstream calls over the first TTL window to avoid burst
 
