@@ -178,7 +178,7 @@ echo "  Sending 8 requests (each will hang then timeout after 5s)..."
 declare -i p2_timeout=0
 for period in "${PERIODS[@]:0:2}"; do
   for hotel in "${HOTELS[@]:0:2}"; do
-    for room in "${ROOMS[@]:0:1}"; do
+    for room in "${ROOMS[@]:0:2}"; do
       request "$period" "$hotel" "$room"
       if [[ "$LAST_STATUS" == "504" ]]; then
         echo -e "  ${RED}[504 TIMEOUT]${NC} $period / $hotel / $room"
@@ -296,6 +296,176 @@ fi
 stats
 
 # ===========================================================================
+# PHASE 4 — Concurrency / Capacity Test
+#
+# Goal:
+#   1. Prove the app handles 10k req/day comfortably on a single instance.
+#   2. Find the concurrency level where latency degrades or errors appear.
+#   3. Document when Redis + multi-instance becomes necessary.
+#
+# Method:
+#   - Restart server with default TTLs → warm all 36 combinations
+#   - Fire N concurrent requests against a single cached key
+#   - Levels: 10 / 50 / 100 / 500
+#   - All requests should be cache HITs → upstream never called
+#   - Measure: 200 vs error count, avg latency via curl %{time_total}
+#
+# Expected results:
+#   - 10k req/day ≈ 0.12 req/sec average → trivial for single instance
+#   - Errors appear only when Puma thread pool (default: 5) is saturated
+#     AND requests queue faster than they are served
+#   - Multi-instance / Redis becomes necessary only when horizontal scale needed
+# ===========================================================================
+
+header "PHASE 4: Concurrency / Capacity — single instance stress test"
+echo -e "  ${DIM}4a. Coalescing — 50 concurrent requests to same cold key → expect 1 upstream call${NC}"
+echo -e "  ${DIM}4b. Throughput — pre-warmed cache, burst 10/50/100/500 concurrent → measure latency${NC}"
+echo ""
+
+restore_server
+
+# ---------------------------------------------------------------------------
+# 4a — Mutex coalescing: 50 concurrent requests to same cold key
+#
+# Expected:
+#   - All 50 return 200
+#   - Upstream called exactly 1x (mutex prevents thundering herd)
+#   - Loki log count for upstream_call on this key = 1
+# ---------------------------------------------------------------------------
+
+echo -e "  ${BLUE}[4a] Coalescing test — cold cache, 50 concurrent to same key${NC}"
+echo -e "  ${DIM}Clearing cache by restarting server...${NC}"
+restart_with_ttl $TEST_CACHE_TTL $TEST_STALE_TTL
+
+LOKI_API="http://localhost:3100"
+TEST_KEY_PARAMS="period=Summer&hotel=FloatingPointResort&room=SingletonRoom"
+T_BEFORE=$(date -u +%s%N)  # nanoseconds
+
+echo "  Firing 50 concurrent requests to Summer / FloatingPointResort / SingletonRoom..."
+tmpdir_4a=$(mktemp -d)
+for i in $(seq 1 50); do
+  curl -s -o /dev/null \
+    -w "%{http_code}\n" \
+    "${APP_URL}?${TEST_KEY_PARAMS}" \
+    > "${tmpdir_4a}/${i}.out" &
+done
+wait
+
+T_AFTER=$(date -u +%s%N)
+
+burst_ok=0; burst_fail=0
+for f in "${tmpdir_4a}"/*.out; do
+  code=$(<"$f")
+  ((total++))
+  if [[ "$code" == "200" ]]; then ((burst_ok++)); ((ok++)); else ((burst_fail++)); ((fail++)); fi
+done
+rm -rf "$tmpdir_4a"
+
+echo -e "  Responses: ${GREEN}${burst_ok} OK${NC} / ${RED}${burst_fail} error${NC}"
+
+# Query Loki for upstream_call count on this key within the burst window
+# Add 2s buffer on each side to account for log ingestion lag
+T_START=$(( T_BEFORE - 2000000000 ))
+T_END=$(( T_AFTER + 5000000000 ))
+LOKI_QUERY='{job="rails",msg="upstream_call"} |= "FloatingPointResort" |= "SingletonRoom" |= "Summer"'
+
+echo -e "  ${DIM}Querying Loki for upstream_call count...${NC}"
+sleep 3  # wait for log ingestion
+
+loki_result=$(curl -s -G "${LOKI_API}/loki/api/v1/query_range" \
+  --data-urlencode "query=${LOKI_QUERY}" \
+  --data-urlencode "start=${T_START}" \
+  --data-urlencode "end=${T_END}" \
+  --data-urlencode "limit=100" 2>/dev/null)
+
+upstream_count=$(echo "$loki_result" | \
+  python3 -c "
+import sys, json
+try:
+  d = json.load(sys.stdin)
+  results = d.get('data', {}).get('result', [])
+  total = sum(len(s.get('values', [])) for s in results)
+  print(total)
+except:
+  print('?')
+" 2>/dev/null)
+
+echo ""
+if [[ "$upstream_count" == "1" ]]; then
+  echo -e "  ${GREEN}✓ Coalescing CONFIRMED: upstream called ${upstream_count}x for 50 concurrent requests${NC}"
+  echo -e "  ${DIM}  → mutex prevented thundering herd, 49 threads waited and read from cache${NC}"
+elif [[ "$upstream_count" == "?" ]] || [[ -z "$upstream_count" ]]; then
+  echo -e "  ${YELLOW}? Loki query failed — check Grafana manually for upstream_call count${NC}"
+elif [[ "$upstream_count" -gt 1 ]]; then
+  echo -e "  ${RED}✗ Thundering herd detected: upstream called ${upstream_count}x for 50 concurrent requests${NC}"
+  echo -e "  ${DIM}  → coalescing not working as expected${NC}"
+else
+  echo -e "  ${DIM}  upstream_call count from Loki: ${upstream_count}${NC}"
+fi
+echo ""
+
+# ---------------------------------------------------------------------------
+# 4b — Throughput burst: pre-warmed cache, increasing concurrency levels
+# ---------------------------------------------------------------------------
+
+echo -e "  ${BLUE}[4b] Throughput test — pre-warmed cache, burst at 10 / 50 / 100 / 500${NC}"
+
+# Warm the benchmark key (may already be cached from 4a, but ensure it)
+request "Summer" "FloatingPointResort" "SingletonRoom"
+if [[ "$LAST_STATUS" == "200" ]]; then
+  echo -e "  ${GREEN}Cache warm. Running concurrency levels...${NC}"
+else
+  echo -e "  ${RED}Warm-up failed (HTTP $LAST_STATUS) — results may be unreliable${NC}"
+fi
+echo ""
+
+concurrency_burst() {
+  local level=$1
+  local tmpdir
+  tmpdir=$(mktemp -d)
+
+  for i in $(seq 1 "$level"); do
+    curl -s -o /dev/null \
+      -w "%{http_code} %{time_total}\n" \
+      "${APP_URL}?${TEST_KEY_PARAMS}" \
+      > "${tmpdir}/${i}.out" &
+  done
+  wait
+
+  local burst_ok=0 burst_fail=0 total_time=0 count=0
+  for f in "${tmpdir}"/*.out; do
+    read -r code t < "$f"
+    ((count++))
+    total_time=$(echo "$total_time + $t" | bc)
+    if [[ "$code" == "200" ]]; then ((burst_ok++)); ((ok++)); else ((burst_fail++)); ((fail++)); fi
+    ((total++))
+  done
+  rm -rf "$tmpdir"
+
+  local avg_ms=0
+  if [[ $count -gt 0 ]]; then
+    avg_ms=$(echo "scale=0; $total_time / $count * 1000" | bc)
+  fi
+
+  if [[ $burst_fail -eq 0 ]]; then
+    echo -e "  ${GREEN}[${level} concurrent]${NC} ${GREEN}${burst_ok} OK${NC} / ${RED}${burst_fail} error${NC} — avg latency: ${avg_ms}ms"
+  else
+    echo -e "  ${YELLOW}[${level} concurrent]${NC} ${GREEN}${burst_ok} OK${NC} / ${RED}${burst_fail} error${NC} — avg latency: ${avg_ms}ms ${RED}← errors detected${NC}"
+  fi
+}
+
+for level in 10 50 100 500; do
+  concurrency_burst "$level"
+  sleep 2
+done
+
+echo ""
+echo -e "  ${DIM}Note: errors at high concurrency = Puma thread pool (5 threads) saturated.${NC}"
+echo -e "  ${DIM}For multi-instance deployments, MemoryStore is NOT shared — switch to Redis.${NC}"
+echo -e "  ${DIM}10k req/day = ~0.12 req/sec avg → well within single-instance capacity.${NC}"
+stats
+
+# ===========================================================================
 # Restore production defaults
 # ===========================================================================
 
@@ -323,5 +493,7 @@ echo -e "  ${GREEN}✓${NC} Upstream Calls         — spike min 1, flat min 2�
 echo -e "  ${GREEN}✓${NC} Responses by Status    — mostly 200, 504 spike in Phase 2"
 echo -e "  ${GREEN}✓${NC} Upstream Response      — success / timeout / 429 rate_limited"
 echo -e "  ${GREEN}✓${NC} Cache Stale Fallback   — served_stale events in Phase 3"
+echo -e "  ${GREEN}✓${NC} Coalescing [4a]        — 50 concurrent cold key → 1 upstream call (no thundering herd)"
+echo -e "  ${GREEN}✓${NC} Concurrency burst [4b] — 10 / 50 / 100 / 500 concurrent, all cache HITs"
 echo -e "  ${GREEN}✓${NC} Request Flow Trace     — paste X-Request-Id to trace end-to-end"
 echo ""

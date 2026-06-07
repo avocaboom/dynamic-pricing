@@ -5,6 +5,10 @@ module Api::V1
 
     RateLimitError = Class.new(StandardError)
 
+    # One mutex per unique cache key — prevents thundering herd under concurrent load.
+    # Bounded to 36 entries (4 periods × 3 hotels × 3 rooms). Never grows beyond that.
+    LOCKS = Concurrent::Map.new
+
     def initialize(period:, hotel:, room:)
       @period = period
       @hotel  = hotel
@@ -14,18 +18,33 @@ module Api::V1
     def run
       cache_key = "pricing/v1/#{@period}/#{@hotel}/#{@room}"
       stale_key = "pricing/v1/stale/#{@period}/#{@hotel}/#{@room}"
-      cache_hit = true
 
-      @result = Rails.cache.fetch(cache_key, expires_in: CACHE_TTL) do
-        cache_hit = false
-        log_info(event: "pricing_cache", cache: "MISS")
-        rate = fetch_from_upstream
-        Rails.cache.write(stale_key, rate, expires_in: STALE_CACHE_TTL)
-        log_info(event: "cache_write", fresh_ttl_s: CACHE_TTL.to_i, stale_ttl_s: STALE_CACHE_TTL.to_i)
-        rate
+      # Fast path — no lock needed on cache hit
+      cached = Rails.cache.read(cache_key)
+      if cached
+        log_info(event: "pricing_cache", cache: "HIT")
+        @result = cached
+        return
       end
 
-      log_info(event: "pricing_cache", cache: "HIT") if cache_hit
+      # Slow path — acquire per-key lock to prevent concurrent upstream calls
+      lock = LOCKS.compute_if_absent(cache_key) { Mutex.new }
+      lock.synchronize do
+        # Double-check: a waiting thread may have found the cache already populated
+        cached = Rails.cache.read(cache_key)
+        if cached
+          log_info(event: "pricing_cache", cache: "HIT")
+          @result = cached
+          return
+        end
+
+        log_info(event: "pricing_cache", cache: "MISS")
+        rate = fetch_from_upstream
+        Rails.cache.write(cache_key, rate, expires_in: CACHE_TTL)
+        Rails.cache.write(stale_key, rate, expires_in: STALE_CACHE_TTL)
+        log_info(event: "cache_write", fresh_ttl_s: CACHE_TTL.to_i, stale_ttl_s: STALE_CACHE_TTL.to_i)
+        @result = rate
+      end
     rescue RateLimitError
       serve_stale_or_error(
         stale_key:      stale_key,
