@@ -30,7 +30,7 @@ docker compose exec interview-dev ./bin/rails test test/controllers/pricing_cont
 # Start everything including Grafana, Loki, Promtail, Prometheus
 docker compose --profile monitoring up -d --build
 
-# Grafana dashboard  → http://localhost:3001  (no login required)
+# Grafana dashboard  → http://localhost:3001/d/dynamic-pricing  (no login required)
 # Prometheus         → http://localhost:9090
 ```
 
@@ -60,7 +60,7 @@ The script uses shortened TTLs to keep total runtime manageable. The production 
 | 3 — Stale fallback | ~4 min | Warms cache slowly, waits 3 min for TTL to expire, exhausts token rate limit → requests return stale rate (`200`) instead of `503`. |
 | 4 — Concurrency / capacity | ~2 min | **4a:** 50 concurrent requests to a single cold key — verifies upstream called exactly once (mutex coalescing). **4b:** Pre-warmed cache burst at 10 / 50 / 100 / 500 concurrent — measures avg latency per level. |
 
-**What to watch in Grafana (`http://localhost:3001`):**
+**What to watch in Grafana (`http://localhost:3001/d/dynamic-pricing`):**
 
 | Panel | What to look for |
 |---|---|
@@ -271,6 +271,10 @@ This assumes all 36 combinations are actively requested throughout the day. The 
 |---|---|
 | Any upstream error + stale exists | Serve stale rate silently (`200`). Covers 429, timeout, 503, and all other errors. |
 | Any upstream error + no stale | Return error to client (`503` or `504` depending on error type). |
+| Upstream returns invalid rate (`0`, negative, non-numeric) | Always `503` — stale is never served, regardless of availability. |
+
+**Why not serve stale for invalid rates?**
+Invalid rate data (e.g. `"0"`) is a **data integrity problem**, not an availability problem. Upstream is reachable and responding — it is sending bad data. Serving stale would silently mask a bug in the pricing model. Unlike a timeout or 429 where the upstream is temporarily unable to respond correctly, an invalid rate means the upstream responded but its output cannot be trusted. The `InvalidRateError` bypasses `serve_stale_or_error` entirely and returns `503` directly.
 
 **Why serve stale for all upstream errors (not just 429)?**
 This is a **business decision** — both behaviors are technically valid:

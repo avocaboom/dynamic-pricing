@@ -3,7 +3,8 @@ module Api::V1
     CACHE_TTL       = ENV.fetch("CACHE_TTL_SECONDS",       300).to_i.seconds
     STALE_CACHE_TTL = ENV.fetch("STALE_CACHE_TTL_SECONDS", 3600).to_i.seconds
 
-    RateLimitError = Class.new(StandardError)
+    RateLimitError   = Class.new(StandardError)
+    InvalidRateError = Class.new(StandardError)
 
     # One mutex per unique cache key — prevents thundering herd under concurrent load.
     # Bounded to 36 entries (4 periods × 3 hotels × 3 rooms). Never grows beyond that.
@@ -45,6 +46,10 @@ module Api::V1
         log_info(event: "cache_write", fresh_ttl_s: CACHE_TTL.to_i, stale_ttl_s: STALE_CACHE_TTL.to_i)
         @result = rate
       end
+    rescue InvalidRateError => e
+      log_error(event: "invalid_rate", message: e.message)
+      self.http_status = :service_unavailable
+      errors << "Pricing service returned invalid data. Please try again later."
     rescue RateLimitError
       serve_stale_or_error(
         stale_key:      stale_key,
@@ -103,6 +108,7 @@ module Api::V1
         &.dig('rate')
 
       raise "Rate not found for the given parameters" if rate.nil?
+      raise InvalidRateError, "Invalid rate received from upstream: #{rate.inspect}" unless rate.to_i > 0
 
       duration_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round
       log_info(event: "upstream_call", status: "success", duration_ms: duration_ms, rate: rate)

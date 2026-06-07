@@ -201,6 +201,53 @@ class Api::V1::PricingControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "returns error and does not cache when upstream returns rate zero" do
+    call_count = 0
+    zero_rate = OpenStruct.new(
+      success?: true,
+      body: { "rates" => [{ "period" => "Summer", "hotel" => "FloatingPointResort", "room" => "SingletonRoom", "rate" => "0" }] }.to_json
+    )
+    RateApiClient.stub(:get_rate, ->(*) { call_count += 1; zero_rate }) do
+      get api_v1_pricing_url, params: valid_params
+      assert_response :service_unavailable
+      assert json_response["error"].present?
+
+      # cache must not have been poisoned — second request must call upstream again
+      get api_v1_pricing_url, params: valid_params
+    end
+    assert_equal 2, call_count, "Invalid rate must not be cached"
+  end
+
+  test "returns error and does not cache when upstream returns negative rate" do
+    negative_rate = OpenStruct.new(
+      success?: true,
+      body: { "rates" => [{ "period" => "Summer", "hotel" => "FloatingPointResort", "room" => "SingletonRoom", "rate" => "-500" }] }.to_json
+    )
+    RateApiClient.stub(:get_rate, negative_rate) do
+      get api_v1_pricing_url, params: valid_params
+      assert_response :service_unavailable
+      assert json_response["error"].present?
+    end
+  end
+
+  test "returns error when upstream returns rates null" do
+    null_rates = OpenStruct.new(success?: true, body: { "rates" => nil }.to_json)
+    RateApiClient.stub(:get_rate, null_rates) do
+      get api_v1_pricing_url, params: valid_params
+      assert_response :service_unavailable
+      assert json_response["error"].present?
+    end
+  end
+
+  test "returns error when upstream returns unexpected JSON structure" do
+    wrong_key = OpenStruct.new(success?: true, body: { "data" => [{ "price" => "15000" }] }.to_json)
+    RateApiClient.stub(:get_rate, wrong_key) do
+      get api_v1_pricing_url, params: valid_params
+      assert_response :service_unavailable
+      assert json_response["error"].present?
+    end
+  end
+
   # --- Rate limit handling ---
 
   test "returns stale rate when upstream hits rate limit and stale cache exists" do

@@ -1,10 +1,13 @@
 {
-  "title": "Dynamic Pricing — Overview",
+  "title": "Dynamic Pricing \u2014 Overview",
   "uid": "dynamic-pricing",
   "schemaVersion": 38,
   "version": 10,
   "refresh": "10s",
-  "time": { "from": "now-1h", "to": "now" },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "templating": {
     "list": [
       {
@@ -20,12 +23,31 @@
         "description": "Filter logs by severity level",
         "query": "info,warn,error",
         "options": [
-          { "text": "All",   "value": "info|warn|error", "selected": true },
-          { "text": "info",  "value": "info",            "selected": false },
-          { "text": "warn",  "value": "warn",            "selected": false },
-          { "text": "error", "value": "error",           "selected": false }
+          {
+            "text": "All",
+            "value": "info|warn|error",
+            "selected": true
+          },
+          {
+            "text": "info",
+            "value": "info",
+            "selected": false
+          },
+          {
+            "text": "warn",
+            "value": "warn",
+            "selected": false
+          },
+          {
+            "text": "error",
+            "value": "error",
+            "selected": false
+          }
         ],
-        "current": { "text": "All", "value": "info|warn|error" },
+        "current": {
+          "text": "All",
+          "value": "info|warn|error"
+        },
         "includeAll": false,
         "multi": false,
         "hide": 0
@@ -33,13 +55,20 @@
     ]
   },
   "panels": [
-
     {
       "id": 7,
-      "title": "Requests per Minute — by Endpoint",
+      "title": "Requests per Minute \u2014 by Endpoint",
       "type": "timeseries",
-      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 8 },
-      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
       "targets": [
         {
           "expr": "sum by (path) (count_over_time({job=\"rails\", msg=\"request\"} | json | __error__=\"\" [$__interval]))",
@@ -49,36 +78,55 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "lines",
+            "lineWidth": 1,
+            "fillOpacity": 15,
+            "lineInterpolation": "smooth",
+            "spanNulls": true
+          }
         }
       },
-      "options": { "tooltip": { "mode": "multi" } }
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
     },
-
     {
       "id": 8,
       "title": "Responses by HTTP Status Code",
       "description": "Percentage breakdown of HTTP response codes over the selected time range.",
       "type": "stat",
-      "gridPos": { "x": 8, "y": 0, "w": 8, "h": 8 },
-      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
       "targets": [
         {
           "expr": "sum(count_over_time({job=\"rails\", msg=\"request\"} | json | status=\"200\" [$__range])) / sum(count_over_time({job=\"rails\", msg=\"request\"} | json [$__range])) * 100",
-          "legendFormat": "HTTP 200 — OK"
+          "legendFormat": "HTTP 200 \u2014 OK"
         },
         {
           "expr": "sum(count_over_time({job=\"rails\", msg=\"request\"} | json | status=\"400\" [$__range])) / sum(count_over_time({job=\"rails\", msg=\"request\"} | json [$__range])) * 100",
-          "legendFormat": "HTTP 400 — Bad Request"
+          "legendFormat": "HTTP 400 \u2014 Bad Request"
         },
         {
           "expr": "sum(count_over_time({job=\"rails\", msg=\"request\"} | json | status=\"503\" [$__range])) / sum(count_over_time({job=\"rails\", msg=\"request\"} | json [$__range])) * 100",
-          "legendFormat": "HTTP 503 — Service Unavailable"
+          "legendFormat": "HTTP 503 \u2014 Service Unavailable"
         },
         {
           "expr": "sum(count_over_time({job=\"rails\", msg=\"request\"} | json | status=\"504\" [$__range])) / sum(count_over_time({job=\"rails\", msg=\"request\"} | json [$__range])) * 100",
-          "legendFormat": "HTTP 504 — Gateway Timeout"
+          "legendFormat": "HTTP 504 \u2014 Gateway Timeout"
         }
       ],
       "fieldConfig": {
@@ -89,18 +137,71 @@
           "max": 100,
           "thresholds": {
             "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
           },
-          "color": { "mode": "thresholds" }
+          "color": {
+            "mode": "thresholds"
+          }
         },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "HTTP 400 — Bad Request" },      "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }] },
-          { "matcher": { "id": "byName", "options": "HTTP 503 — Service Unavailable" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] },
-          { "matcher": { "id": "byName", "options": "HTTP 504 — Gateway Timeout" },  "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "HTTP 400 \u2014 Bad Request"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "HTTP 503 \u2014 Service Unavailable"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "HTTP 504 \u2014 Gateway Timeout"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
         ]
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "orientation": "horizontal",
         "textMode": "value_and_name",
         "colorMode": "background",
@@ -108,14 +209,21 @@
         "justifyMode": "auto"
       }
     },
-
     {
       "id": 12,
-      "title": "Latency (ms) — p50 / p95 / p99",
+      "title": "Latency (ms) \u2014 p50 / p95 / p99",
       "description": "Request duration percentiles from Lograge duration field (ms).",
       "type": "timeseries",
-      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 8 },
-      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
       "targets": [
         {
           "expr": "max by () (quantile_over_time(0.50, {job=\"rails\", msg=\"request\"} | json | unwrap duration [$__interval]))",
@@ -133,32 +241,51 @@
       "fieldConfig": {
         "defaults": {
           "unit": "ms",
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "lines",
+            "lineWidth": 1,
+            "fillOpacity": 15,
+            "lineInterpolation": "smooth",
+            "spanNulls": true
+          }
         }
       },
-      "options": { "tooltip": { "mode": "multi" } }
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
     },
-
     {
       "id": 14,
       "title": "Cache Efficiency",
       "description": "Breakdown of how requests were served over the selected time range.",
       "type": "stat",
-      "gridPos": { "x": 0, "y": 8, "w": 6, "h": 8 },
-      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 6,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
       "targets": [
         {
           "expr": "sum(count_over_time({job=\"rails\", msg=\"pricing_cache\"} |= \"\\\"cache\\\":\\\"HIT\\\"\" [$__range])) / sum(count_over_time({job=\"rails\", msg=\"pricing_cache\"} [$__range])) * 100",
-          "legendFormat": "Fresh HIT — served from fresh cache (within 5-min TTL)"
+          "legendFormat": "Fresh HIT \u2014 served from fresh cache (within 5-min TTL)"
         },
         {
           "expr": "sum(count_over_time({job=\"rails\", msg=\"stale_fallback\"} |= \"served_stale\" [$__range])) / sum(count_over_time({job=\"rails\", msg=\"pricing_cache\"} [$__range])) * 100",
-          "legendFormat": "Stale HIT — TTL expired, upstream error, served from stale"
+          "legendFormat": "Stale HIT \u2014 TTL expired, upstream error, served from stale"
         },
         {
           "expr": "sum(count_over_time({job=\"rails\", msg=\"pricing_cache\"} |= \"\\\"cache\\\":\\\"MISS\\\"\" [$__range])) / sum(count_over_time({job=\"rails\", msg=\"pricing_cache\"} [$__range])) * 100",
-          "legendFormat": "Upstream — cache MISS, request forwarded to upstream"
+          "legendFormat": "Upstream \u2014 cache MISS, request forwarded to upstream"
         }
       ],
       "fieldConfig": {
@@ -170,16 +297,31 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red",    "value": null },
-              { "color": "yellow", "value": 50 },
-              { "color": "green",  "value": 80 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "green",
+                "value": 80
+              }
             ]
           },
-          "color": { "mode": "thresholds" }
+          "color": {
+            "mode": "thresholds"
+          }
         }
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "orientation": "horizontal",
         "textMode": "value_and_name",
         "colorMode": "background",
@@ -187,13 +329,20 @@
         "justifyMode": "auto"
       }
     },
-
     {
       "id": 1,
-      "title": "Cache — Fresh HIT vs MISS (5-min TTL)",
+      "title": "Cache \u2014 Fresh HIT vs MISS (5-min TTL)",
       "type": "timeseries",
-      "gridPos": { "x": 6, "y": 8, "w": 9, "h": 8 },
-      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": {
+        "x": 6,
+        "y": 8,
+        "w": 9,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
       "targets": [
         {
           "expr": "sum by (cache) (count_over_time({job=\"rails\", msg=\"pricing_cache\"} [$__interval]))",
@@ -203,19 +352,38 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "lines",
+            "lineWidth": 1,
+            "fillOpacity": 15,
+            "lineInterpolation": "smooth",
+            "spanNulls": true
+          }
         }
       },
-      "options": { "tooltip": { "mode": "multi" } }
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
     },
-
     {
       "id": 9,
-      "title": "Cache — Stale Fallback (1-hour TTL)",
+      "title": "Cache \u2014 Stale Fallback (1-hour TTL)",
       "type": "timeseries",
-      "gridPos": { "x": 15, "y": 8, "w": 9, "h": 8 },
-      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": {
+        "x": 15,
+        "y": 8,
+        "w": 9,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
       "targets": [
         {
           "expr": "count_over_time({job=\"rails\", msg=\"stale_fallback\"} |= \"served_stale\" [$__interval])",
@@ -223,25 +391,44 @@
         },
         {
           "expr": "count_over_time({job=\"rails\", msg=\"stale_fallback\"} |= \"no_stale_available\" [$__interval])",
-          "legendFormat": "no stale — 503"
+          "legendFormat": "no stale \u2014 503"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "lines",
+            "lineWidth": 1,
+            "fillOpacity": 15,
+            "lineInterpolation": "smooth",
+            "spanNulls": true
+          }
         }
       },
-      "options": { "tooltip": { "mode": "multi" } }
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
     },
-
     {
       "id": 2,
       "title": "Upstream Calls",
       "type": "timeseries",
-      "gridPos": { "x": 0, "y": 16, "w": 8, "h": 8 },
-      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
       "targets": [
         {
           "expr": "count_over_time({job=\"rails\", msg=\"upstream_call\"} |= \"\\\"status\\\":\\\"success\\\"\" [$__interval])",
@@ -263,44 +450,65 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true, "showPoints": "always", "pointSize": 6 }
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "lines",
+            "lineWidth": 1,
+            "fillOpacity": 15,
+            "lineInterpolation": "smooth",
+            "spanNulls": true,
+            "showPoints": "always",
+            "pointSize": 6
+          }
         }
       },
-      "options": { "tooltip": { "mode": "multi" } }
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
     },
-
     {
       "id": 10,
       "title": "Upstream Response by Status",
       "description": "Percentage breakdown of upstream call outcomes over the selected time range.",
       "type": "stat",
-      "gridPos": { "x": 8, "y": 16, "w": 8, "h": 8 },
-      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": {
+        "x": 8,
+        "y": 16,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
       "targets": [
         {
           "expr": "sum(count_over_time({job=\"rails\", msg=\"upstream_call\"} |= \"\\\"status\\\":\\\"success\\\"\" [$__range])) / (sum(count_over_time({job=\"rails\", msg=\"upstream_call\"} [$__range])) + sum(count_over_time({job=\"rails\", msg=\"upstream_timeout\"} [$__range])) + sum(count_over_time({job=\"rails\", msg=\"upstream_error\"} [$__range]))) * 100",
-          "legendFormat": "200 — Success"
+          "legendFormat": "200 \u2014 Success"
         },
         {
           "expr": "sum(count_over_time({job=\"rails\", msg=\"upstream_call\"} |= \"rate_limited\" [$__range])) / (sum(count_over_time({job=\"rails\", msg=\"upstream_call\"} [$__range])) + sum(count_over_time({job=\"rails\", msg=\"upstream_timeout\"} [$__range])) + sum(count_over_time({job=\"rails\", msg=\"upstream_error\"} [$__range]))) * 100",
-          "legendFormat": "429 — Rate Limited"
+          "legendFormat": "429 \u2014 Rate Limited"
         },
         {
           "expr": "sum(count_over_time({job=\"rails\", msg=\"upstream_timeout\"} [$__range])) / (sum(count_over_time({job=\"rails\", msg=\"upstream_call\"} [$__range])) + sum(count_over_time({job=\"rails\", msg=\"upstream_timeout\"} [$__range])) + sum(count_over_time({job=\"rails\", msg=\"upstream_error\"} [$__range]))) * 100",
-          "legendFormat": "504 — Timeout"
+          "legendFormat": "504 \u2014 Timeout"
         },
         {
           "expr": "sum(count_over_time({job=\"rails\", msg=\"upstream_error\"} |= \"HTTP 500\" [$__range])) / (sum(count_over_time({job=\"rails\", msg=\"upstream_call\"} [$__range])) + sum(count_over_time({job=\"rails\", msg=\"upstream_timeout\"} [$__range])) + sum(count_over_time({job=\"rails\", msg=\"upstream_error\"} [$__range]))) * 100",
-          "legendFormat": "500 — Internal Server Error"
+          "legendFormat": "500 \u2014 Internal Server Error"
         },
         {
           "expr": "sum(count_over_time({job=\"rails\", msg=\"upstream_error\"} |= \"HTTP 502\" [$__range])) / (sum(count_over_time({job=\"rails\", msg=\"upstream_call\"} [$__range])) + sum(count_over_time({job=\"rails\", msg=\"upstream_timeout\"} [$__range])) + sum(count_over_time({job=\"rails\", msg=\"upstream_error\"} [$__range]))) * 100",
-          "legendFormat": "502 — Bad Gateway"
+          "legendFormat": "502 \u2014 Bad Gateway"
         },
         {
           "expr": "sum(count_over_time({job=\"rails\", msg=\"upstream_error\"} |= \"HTTP 503\" [$__range])) / (sum(count_over_time({job=\"rails\", msg=\"upstream_call\"} [$__range])) + sum(count_over_time({job=\"rails\", msg=\"upstream_timeout\"} [$__range])) + sum(count_over_time({job=\"rails\", msg=\"upstream_error\"} [$__range]))) * 100",
-          "legendFormat": "503 — Service Unavailable"
+          "legendFormat": "503 \u2014 Service Unavailable"
         }
       ],
       "fieldConfig": {
@@ -311,20 +519,101 @@
           "max": 100,
           "thresholds": {
             "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
           },
-          "color": { "mode": "thresholds" }
+          "color": {
+            "mode": "thresholds"
+          }
         },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "429 — Rate Limited" },        "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }] },
-          { "matcher": { "id": "byName", "options": "504 — Timeout" },             "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] },
-          { "matcher": { "id": "byName", "options": "500 — Internal Server Error" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
-          { "matcher": { "id": "byName", "options": "502 — Bad Gateway" },         "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
-          { "matcher": { "id": "byName", "options": "503 — Service Unavailable" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "429 \u2014 Rate Limited"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "504 \u2014 Timeout"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "500 \u2014 Internal Server Error"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "502 \u2014 Bad Gateway"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "503 \u2014 Service Unavailable"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
         ]
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "orientation": "horizontal",
         "textMode": "value_and_name",
         "colorMode": "background",
@@ -332,14 +621,21 @@
         "justifyMode": "auto"
       }
     },
-
     {
       "id": 13,
-      "title": "Upstream Latency (ms) — p50 / p95 / p99",
+      "title": "Upstream Latency (ms) \u2014 p50 / p95 / p99",
       "description": "Duration from upstream_call start to success, extracted from duration_ms field (ms).",
       "type": "timeseries",
-      "gridPos": { "x": 16, "y": 16, "w": 8, "h": 8 },
-      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": {
+        "x": 16,
+        "y": 16,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
       "targets": [
         {
           "expr": "max by () (quantile_over_time(0.50, {job=\"rails\", msg=\"upstream_call\"} | json | unwrap duration_ms [$__interval]))",
@@ -357,20 +653,39 @@
       "fieldConfig": {
         "defaults": {
           "unit": "ms",
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "lines", "lineWidth": 1, "fillOpacity": 15, "lineInterpolation": "smooth", "spanNulls": true }
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "lines",
+            "lineWidth": 1,
+            "fillOpacity": 15,
+            "lineInterpolation": "smooth",
+            "spanNulls": true
+          }
         }
       },
-      "options": { "tooltip": { "mode": "multi" } }
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
     },
-
     {
       "id": 5,
-      "title": "Request Flow Trace — filter by Request ID",
+      "title": "Request Flow Trace \u2014 filter by Request ID",
       "description": "Paste a request_id above to trace a single request end-to-end. Leave empty to show all recent logs.",
       "type": "logs",
-      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 12 },
-      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 12
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
       "targets": [
         {
           "expr": "{job=\"rails\", level=~\"$level\"} |= \"$request_id\"",
@@ -384,6 +699,5 @@
         "sortOrder": "Descending"
       }
     }
-
   ]
 }

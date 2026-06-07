@@ -24,5 +24,15 @@ schema_config:
         prefix: index_
         period: 24h
 
+ingester:
+  chunk_idle_period: 30s
+  max_chunk_age: 1m
+  chunk_retain_period: 15s
+
+querier:
+  query_ingesters_within: 3h
+  max_concurrent: 20
+
 limits_config:
   retention_period: 24h
+  max_query_parallelism: 16

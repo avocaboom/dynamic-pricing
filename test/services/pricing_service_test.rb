@@ -251,6 +251,75 @@ class Api::V1::PricingServiceTest < ActiveSupport::TestCase
     assert service.served_stale?
   end
 
+  # --- Invalid rate — no stale fallback ---
+
+  test "is invalid with 503 when upstream returns rate zero" do
+    zero_rate = OpenStruct.new(
+      success?: true,
+      body: { "rates" => [{ "period" => "Summer", "hotel" => "FloatingPointResort", "room" => "SingletonRoom", "rate" => "0" }] }.to_json
+    )
+    service = build_service
+    RateApiClient.stub(:get_rate, zero_rate) do
+      service.run
+    end
+
+    refute service.valid?
+    assert_equal :service_unavailable, service.http_status
+    refute service.served_stale?, "invalid rate must not trigger stale fallback"
+  end
+
+  test "does not serve stale when upstream returns invalid rate even if stale exists" do
+    # Populate stale cache with a valid rate
+    RateApiClient.stub(:get_rate, success_response) do
+      run_service
+    end
+
+    zero_rate = OpenStruct.new(
+      success?: true,
+      body: { "rates" => [{ "period" => "Summer", "hotel" => "FloatingPointResort", "room" => "SingletonRoom", "rate" => "0" }] }.to_json
+    )
+    service = nil
+    travel(Api::V1::PricingService::CACHE_TTL + 1.minute) do
+      RateApiClient.stub(:get_rate, zero_rate) do
+        service = build_service
+        service.run
+      end
+    end
+
+    refute service.valid?, "should be invalid — upstream data is bad regardless of stale"
+    refute service.served_stale?, "must not serve stale for invalid rate data"
+    assert_equal :service_unavailable, service.http_status
+  end
+
+  # --- Concurrency / mutex coalescing ---
+
+  test "concurrent requests to same cold key call upstream exactly once" do
+    call_count = Concurrent::AtomicFixnum.new(0)
+    results    = Concurrent::Array.new
+
+    upstream = lambda do |**|
+      sleep 0.05  # hold the upstream call open so threads overlap at the mutex
+      call_count.increment
+      success_response
+    end
+
+    RateApiClient.stub(:get_rate, upstream) do
+      threads = 10.times.map do
+        Thread.new do
+          service = build_service
+          service.run
+          results << service.result
+        end
+      end
+      threads.each(&:join)
+    end
+
+    assert_equal 1, call_count.value,
+      "Expected upstream to be called once, got #{call_count.value} (mutex not coalescing)"
+    assert_equal 10, results.size
+    assert results.all? { |r| r == "15000" }, "All threads should receive the correct rate"
+  end
+
   # --- Token safety ---
 
   test "API token does not appear in log output" do
